@@ -105,7 +105,7 @@ function SetRow({ e, idx, day, date, logged, defaultWeight }: {
       {e.unit === "lb" ? (
         <label className="relative">
           <span className="sr-only">Weight lb</span>
-          <input inputMode="decimal" value={weight} onChange={(ev) => setWeight(ev.target.value)} disabled={done} placeholder="lb"
+          <input inputMode="decimal" value={weight} onChange={(ev) => setWeight(ev.target.value)} disabled={done} placeholder="0"
             className="h-11 w-full rounded-md border bg-background px-3 pr-8 font-mono text-base font-bold tabular-nums disabled:opacity-80" data-testid={`input-weight-${e.id}-${idx}`} />
           <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">lb</span>
         </label>
