@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute } from "wouter";
-import { ArrowDown, ArrowUp, Check, ChevronDown, Clock, Flame, Target, TrendingUp, Wind } from "lucide-react";
-import type { SetLog } from "@shared/schema";
-import { PLAN, imgSrc, todayISO, todaysDay, type Exercise, type Block } from "@/data/plan";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { ArrowDown, ArrowUp, Check, ChevronDown, Clock, Flame, Target, TrendingUp, Wind, Trophy, RotateCcw, Pencil } from "lucide-react";
+import { PLAN, imgSrc, todayISO, todaysDay, weekKey, type Exercise, type Block } from "@/data/plan";
+import { useStore, liveSets, liveSessions, logSet, logSets, unlogSet, finishSession, reopenSession, previousFor, type SetRec } from "@/lib/store";
 import { useRestTimer } from "@/components/shell";
 import { cn } from "@/lib/utils";
 
@@ -16,24 +14,15 @@ function repLabel(e: Exercise) {
   return e.perSide ? `${r}/side` : r;
 }
 
-function lastSession(logs: SetLog[], exId: string, today: string) {
-  const prev = logs.filter((l) => l.exerciseId === exId && l.date < today);
-  if (!prev.length) return null;
-  const date = prev.reduce((a, l) => (l.date > a ? l.date : a), prev[0].date);
-  const sets = prev.filter((l) => l.date === date).sort((a, b) => a.setIndex - b.setIndex);
-  return { date, sets };
-}
-
-function overloadHint(e: Exercise, last: ReturnType<typeof lastSession>) {
-  if (!last) return null;
-  const top = last.sets.reduce((a, s) => (s.weight > a.weight || (s.weight === a.weight && s.reps > a.reps) ? s : a), last.sets[0]);
-  const allTop = last.sets.length >= e.sets && last.sets.every((s) => s.reps >= e.reps[1] && s.weight >= top.weight);
-  const unit = e.unit === "lb" ? " lb" : "";
-  const w = e.unit === "lb" ? `${top.weight}${unit} × ` : "";
-  const r = e.unit === "sec" ? `${top.reps}s` : `${top.reps}`;
-  if (e.unit === "lb" && allTop) return { last: `${w}${r}`, next: `Go ${top.weight + 5} lb`, up: true, weight: top.weight + 5 };
-  const nextReps = Math.min(top.reps + 1, e.unit === "sec" ? 90 : 30);
-  return { last: `${w}${r}`, next: e.unit === "sec" ? `Hold ${nextReps + 4}s` : `Try ${nextReps} reps`, up: false, weight: top.weight };
+type Prev = ReturnType<typeof previousFor>;
+function nextTarget(e: Exercise, prev: Prev) {
+  if (!prev) return null;
+  const { top, sets } = prev;
+  const allTop = sets.length >= e.sets && sets.every((s) => s.reps >= e.reps[1] && s.weight >= top.weight);
+  const lastTxt = e.unit === "lb" ? `${top.weight} lb × ${top.reps}` : e.unit === "sec" ? `${top.reps}s` : `${top.reps} reps`;
+  if (e.unit === "lb" && allTop) return { last: lastTxt, next: `Go ${top.weight + 5} lb`, weight: top.weight + 5, up: true };
+  if (e.unit === "sec") return { last: lastTxt, next: `Hold ${top.reps + 5}s`, weight: 0, up: false };
+  return { last: lastTxt, next: `Try ${top.reps + 1} reps`, weight: top.weight, up: false };
 }
 
 /* ---------- Image (auto start/end flip, tap to pause) ---------- */
@@ -47,123 +36,123 @@ function ExerciseImage({ id, name }: { id: string; name: string }) {
     return () => clearInterval(t);
   }, [auto]);
   return (
-    <button
-      type="button"
-      onClick={() => { setAuto(false); setFrame((f) => (f ? 0 : 1)); }}
+    <button type="button" onClick={() => { setAuto(false); setFrame((f) => (f ? 0 : 1)); }}
       className="relative block aspect-[3/2] w-full overflow-hidden rounded-lg bg-white"
-      aria-label={`${name} demo, tap to switch start and end position`}
-      data-testid={`img-exercise-${id}`}
-    >
+      aria-label={`${name} demo, tap to switch start and end position`} data-testid={`img-exercise-${id}`}>
       {[0, 1].map((f) => (
         <img key={f} src={imgSrc(id, f as 0 | 1)} alt={`${name} ${f ? "end" : "start"} position`} loading="lazy" width={600} height={400}
           className={cn("absolute inset-0 h-full w-full object-contain transition-opacity duration-300", frame === f ? "opacity-100" : "opacity-0")} />
       ))}
-      <span className="absolute left-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-white">
-        {frame ? "End" : "Start"}
-      </span>
+      <span className="absolute left-2 top-2 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase tracking-wider text-white">{frame ? "End" : "Start"}</span>
     </button>
   );
 }
 
-/* ---------- Set row ---------- */
-function SetRow({ e, idx, day, date, logged, defaultWeight }: {
-  e: Exercise; idx: number; day: number; date: string; logged?: SetLog; defaultWeight: number | null;
-}) {
-  const timer = useRestTimer();
-  const [weight, setWeight] = useState<string>(logged ? String(logged.weight) : defaultWeight != null ? String(defaultWeight) : "");
-  const [reps, setReps] = useState<string>(logged ? String(logged.reps) : "");
-  useEffect(() => {
-    if (logged) { setWeight(String(logged.weight)); setReps(String(logged.reps)); }
-  }, [logged?.id]);
-  useEffect(() => {
-    if (!logged && defaultWeight != null && weight === "") setWeight(String(defaultWeight));
-  }, [defaultWeight]);
-
-  const save = useMutation({
-    mutationFn: async () => {
-      const r = Number(reps || e.reps[1]);
-      const w = e.unit === "lb" ? Number(weight || 0) : 0;
-      return (await apiRequest("POST", "/api/sets", { date, day, exerciseId: e.id, setIndex: idx, weight: w, reps: r })).json();
-    },
-    onSuccess: () => {
-      if (!reps) setReps(String(e.reps[1]));
-      queryClient.invalidateQueries({ queryKey: ["/api/sets"] });
-      if (idx < e.sets - 1) timer.start(e.rest, `${e.name} · set ${idx + 2}`);
-      else timer.start(Math.max(e.rest, 90), "Next exercise");
-    },
-  });
-  const undo = useMutation({
-    mutationFn: async () => apiRequest("DELETE", `/api/sets/${logged!.id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/sets"] }),
-  });
-
-  const done = !!logged;
-  const repsPh = e.unit === "sec" ? `${e.reps[1]}s` : `${e.reps[1]}`;
+function Stat({ label, value, icon, small }: { label: string; value: string; icon?: React.ReactNode; small?: boolean }) {
   return (
-    <div className={cn("grid grid-cols-[2rem_1fr_1fr_3rem] items-center gap-2 rounded-lg px-1 py-1", done && "bg-primary/10")} data-testid={`row-set-${e.id}-${idx}`}>
-      <span className="text-center font-mono text-sm font-bold text-muted-foreground">{idx + 1}</span>
-      {e.unit === "lb" ? (
-        <label className="relative">
-          <span className="sr-only">Weight lb</span>
-          <input inputMode="decimal" value={weight} onChange={(ev) => setWeight(ev.target.value)} disabled={done} placeholder="0"
-            className="h-11 w-full rounded-md border bg-background px-3 pr-8 font-mono text-base font-bold tabular-nums disabled:opacity-80" data-testid={`input-weight-${e.id}-${idx}`} />
-          <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">lb</span>
-        </label>
-      ) : (
-        <span className="pl-2 text-sm text-muted-foreground">Bodyweight</span>
-      )}
-      <label className="relative">
-        <span className="sr-only">{e.unit === "sec" ? "Seconds" : "Reps"}</span>
-        <input inputMode="numeric" value={reps} onChange={(ev) => setReps(ev.target.value)} disabled={done} placeholder={repsPh}
-          className="h-11 w-full rounded-md border bg-background px-3 pr-10 font-mono text-base font-bold tabular-nums disabled:opacity-80" data-testid={`input-reps-${e.id}-${idx}`} />
-        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{e.unit === "sec" ? "sec" : "reps"}</span>
-      </label>
-      <button
-        onClick={() => (done ? undo.mutate() : save.mutate())}
-        disabled={save.isPending || undo.isPending}
-        aria-label={done ? `Undo set ${idx + 1}` : `Complete set ${idx + 1}`}
-        className={cn("flex h-11 w-12 items-center justify-center rounded-md border transition-colors",
-          done ? "border-primary bg-primary text-primary-foreground" : "bg-secondary hover-elevate")}
-        data-testid={`button-done-${e.id}-${idx}`}
-      >
-        <Check className="h-5 w-5" strokeWidth={3} />
-      </button>
+    <div className="rounded-md bg-secondary px-2 py-1.5">
+      <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{icon}{label}</div>
+      <div className={cn("font-mono font-bold tabular-nums leading-tight", small ? "text-xs" : "text-sm")}>{value}</div>
     </div>
   );
 }
 
 /* ---------- Exercise card ---------- */
-function ExerciseCard({ e, n, day, date, logs, tag }: { e: Exercise; n: number; day: number; date: string; logs: SetLog[]; tag?: string }) {
-  const todays = logs.filter((l) => l.exerciseId === e.id && l.date === date);
-  const last = lastSession(logs, e.id, date);
-  const hint = overloadHint(e, last);
-  const doneCount = todays.length;
-  const complete = doneCount >= e.sets;
+function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; day: number; date: string; sets: SetRec[]; tag?: string }) {
+  const timer = useRestTimer();
+  const todays = sets.filter((l) => l.exerciseId === e.id && l.date === date);
+  const prev = useMemo(() => previousFor(sets, e.id, date), [sets, e.id, date]);
+  const target = nextTarget(e, prev);
+  const defaultW = target?.weight ? String(target.weight) : "";
+  const complete = todays.length >= e.sets;
+  const [open, setOpen] = useState(!complete);
+  useEffect(() => { if (complete) setOpen(false); }, [complete]);
+
+  const [vals, setVals] = useState(() =>
+    Array.from({ length: e.sets }, (_, i) => {
+      const l = todays.find((t) => t.setIndex === i);
+      return { w: l ? String(l.weight) : defaultW, r: l ? String(l.reps) : "" };
+    }),
+  );
+  useEffect(() => {
+    setVals((v) => v.map((x, i) => {
+      const l = todays.find((t) => t.setIndex === i);
+      return l ? { w: String(l.weight), r: String(l.reps) } : x.w === "" && defaultW ? { ...x, w: defaultW } : x;
+    }));
+  }, [todays.length, defaultW]);
+
+  const defReps = e.unit === "bw" && e.reps[1] >= 20 ? e.reps[0] : e.reps[1];
+  const rec = (i: number) => ({
+    date, day, exerciseId: e.id, setIndex: i,
+    weight: e.unit === "lb" ? Number(vals[i].w || 0) : 0,
+    reps: Number(vals[i].r || defReps),
+  });
+
+  const tick = (i: number) => {
+    const l = todays.find((t) => t.setIndex === i);
+    if (l) return unlogSet(l.id);
+    logSet(rec(i));
+    if (!vals[i].r) setVals((v) => v.map((x, j) => (j === i ? { ...x, r: String(defReps) } : x)));
+    if (i < e.sets - 1) timer.start(e.rest, `${e.name} · set ${i + 2}`);
+    else timer.start(Math.max(e.rest, 90), "Next exercise");
+  };
+
+  const doneAll = () => {
+    const missing = Array.from({ length: e.sets }, (_, i) => i).filter((i) => !todays.some((t) => t.setIndex === i));
+    logSets(missing.map(rec));
+    timer.start(Math.max(e.rest, 90), "Next exercise");
+    setOpen(false);
+  };
+
+  const summary = todays.length
+    ? e.unit === "lb"
+      ? `${todays.length} × ${Math.max(...todays.map((t) => t.weight))} lb · ${todays.map((t) => t.reps).join("/")}`
+      : `${todays.length} sets · ${todays.map((t) => t.reps).join("/")}${e.unit === "sec" ? "s" : ""}`
+    : "";
+
+  /* compact completed row */
+  if (complete && !open) {
+    return (
+      <article className="flex items-center gap-3 rounded-xl border border-primary/50 bg-card px-3 py-3" data-testid={`card-exercise-${e.id}`}>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"><Check className="h-4 w-4" strokeWidth={3} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-bold">{e.name}</div>
+          <div className="truncate font-mono text-xs text-muted-foreground" data-testid={`text-summary-${e.id}`}>{summary}</div>
+        </div>
+        {prev && todays.some((t) => t.weight > prev.top.weight) && <Trophy className="h-4 w-4 text-chart-4" aria-label="Heavier than last week" />}
+        <button onClick={() => setOpen(true)} className="flex h-9 items-center gap-1 rounded-md bg-secondary px-2.5 text-xs font-medium hover-elevate" data-testid={`button-edit-${e.id}`}><Pencil className="h-3.5 w-3.5" />Edit</button>
+      </article>
+    );
+  }
+
   return (
     <article className={cn("rounded-xl border bg-card p-3 sm:p-4", complete && "border-primary/60")} data-testid={`card-exercise-${e.id}`}>
       <div className="mb-3 flex items-start gap-3">
-        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg font-mono text-sm font-bold",
-          complete ? "bg-primary text-primary-foreground" : "bg-secondary")}>{complete ? <Check className="h-4 w-4" strokeWidth={3} /> : tag ?? n}</span>
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg font-mono text-sm font-bold", complete ? "bg-primary text-primary-foreground" : "bg-secondary")}>
+          {complete ? <Check className="h-4 w-4" strokeWidth={3} /> : tag ?? n}
+        </span>
         <div className="min-w-0 flex-1">
           <h3 className="text-base font-bold leading-tight">{e.name}</h3>
-          <div className="mt-1 flex items-center gap-1.5 text-sm text-primary">
-            <Target className="h-3.5 w-3.5 shrink-0" />
-            <span className="font-medium">Feel it: {e.feel}</span>
-          </div>
+          <div className="mt-1 flex items-center gap-1.5 text-sm text-primary"><Target className="h-3.5 w-3.5 shrink-0" /><span className="font-medium">Feel it: {e.feel}</span></div>
         </div>
-        <span className="font-mono text-xs font-bold text-muted-foreground">{doneCount}/{e.sets}</span>
+        {prev?.lastWeek && e.unit === "lb" ? (
+          <span className="shrink-0 rounded-md border px-1.5 py-0.5 text-right leading-tight" title="Your top weight last week" data-testid={`chip-lastweek-${e.id}`}>
+            <span className="block text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Last wk</span>
+            <span className="font-mono text-xs font-bold">{prev.top.weight} lb</span>
+          </span>
+        ) : (
+          <span className="font-mono text-xs font-bold text-muted-foreground">{todays.length}/{e.sets}</span>
+        )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
         <ExerciseImage id={e.img} name={e.name} />
-
         <div className="flex flex-col gap-2.5">
           <div className="grid grid-cols-3 gap-1.5">
             <Stat label="Sets × Reps" value={`${e.sets} × ${repLabel(e)}`} />
             <Stat label="Rest" value={`${e.rest}s`} icon={<Clock className="h-3 w-3" />} />
             <Stat label="Start" value={e.start.replace(/ each| stack|, one DB/g, "")} small />
           </div>
-
           <div className="grid grid-cols-2 gap-1.5 text-sm">
             <div className="flex items-center gap-2 rounded-md bg-secondary px-2.5 py-2">
               <ArrowDown className="h-4 w-4 shrink-0 text-chart-3" />
@@ -174,23 +163,17 @@ function ExerciseCard({ e, n, day, date, logs, tag }: { e: Exercise; n: number; 
               <div className="min-w-0"><div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Exhale</div><div className="truncate font-medium">{e.exhale}</div></div>
             </div>
           </div>
-
           <ul className="space-y-1 text-sm">
-            {e.cues.map((c) => (
-              <li key={c} className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /><span>{c}</span></li>
-            ))}
+            {e.cues.map((c) => <li key={c} className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /><span>{c}</span></li>)}
           </ul>
-
-          {hint ? (
-            <div className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm" data-testid={`text-hint-${e.id}`}>
+          {target ? (
+            <div className={cn("flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm", target.up && "border-primary bg-primary/10")} data-testid={`text-hint-${e.id}`}>
               <TrendingUp className="h-4 w-4 shrink-0 text-primary" />
-              <span className="text-muted-foreground">Last: <span className="font-mono font-bold text-foreground">{hint.last}</span></span>
-              <span className="ml-auto font-bold text-primary">{hint.next}</span>
+              <span className="text-muted-foreground">{prev?.lastWeek ? "Last wk" : "Last"}: <span className="font-mono font-bold text-foreground">{target.last}</span></span>
+              <span className="ml-auto font-bold text-primary">{target.next}</span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">
-              <Flame className="h-4 w-4 shrink-0" /> First time: last 2 reps should feel hard
-            </div>
+            <div className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground"><Flame className="h-4 w-4 shrink-0" /> First time: last 2 reps should feel hard</div>
           )}
         </div>
       </div>
@@ -199,21 +182,46 @@ function ExerciseCard({ e, n, day, date, logs, tag }: { e: Exercise; n: number; 
         <div className="grid grid-cols-[2rem_1fr_1fr_3rem] gap-2 px-1 pb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
           <span className="text-center">Set</span><span>{e.unit === "lb" ? "Weight" : "Load"}</span><span>{e.unit === "sec" ? "Time" : "Reps"}</span><span className="text-center">Done</span>
         </div>
-        {Array.from({ length: e.sets }).map((_, i) => (
-          <SetRow key={`${e.id}-${i}-${date}`} e={e} idx={i} day={day} date={date}
-            logged={todays.find((l) => l.setIndex === i)} defaultWeight={hint?.weight ?? null} />
-        ))}
+        {vals.map((v, i) => {
+          const done = todays.some((t) => t.setIndex === i);
+          return (
+            <div key={i} className={cn("grid grid-cols-[2rem_1fr_1fr_3rem] items-center gap-2 rounded-lg px-1 py-1", done && "bg-primary/10")} data-testid={`row-set-${e.id}-${i}`}>
+              <span className="text-center font-mono text-sm font-bold text-muted-foreground">{i + 1}</span>
+              {e.unit === "lb" ? (
+                <label className="relative">
+                  <span className="sr-only">Weight lb</span>
+                  <input inputMode="decimal" value={v.w} disabled={done} placeholder="0"
+                    onChange={(ev) => setVals((all) => all.map((x, j) => (j >= i && !todays.some((t) => t.setIndex === j) && (j === i || x.w === all[i].w) ? { ...x, w: ev.target.value } : x)))}
+                    className="h-11 w-full rounded-md border bg-background px-3 pr-8 font-mono text-base font-bold tabular-nums disabled:opacity-80" data-testid={`input-weight-${e.id}-${i}`} />
+                  <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">lb</span>
+                </label>
+              ) : <span className="pl-2 text-sm text-muted-foreground">Bodyweight</span>}
+              <label className="relative">
+                <span className="sr-only">{e.unit === "sec" ? "Seconds" : "Reps"}</span>
+                <input inputMode="numeric" value={v.r} disabled={done} placeholder={String(defReps)}
+                  onChange={(ev) => setVals((all) => all.map((x, j) => (j === i ? { ...x, r: ev.target.value } : x)))}
+                  className="h-11 w-full rounded-md border bg-background px-3 pr-10 font-mono text-base font-bold tabular-nums disabled:opacity-80" data-testid={`input-reps-${e.id}-${i}`} />
+                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{e.unit === "sec" ? "sec" : "reps"}</span>
+              </label>
+              <button onClick={() => tick(i)} aria-label={done ? `Undo set ${i + 1}` : `Complete set ${i + 1}`}
+                className={cn("flex h-11 w-12 items-center justify-center rounded-md border transition-colors", done ? "border-primary bg-primary text-primary-foreground" : "bg-secondary hover-elevate")}
+                data-testid={`button-done-${e.id}-${i}`}>
+                <Check className="h-5 w-5" strokeWidth={3} />
+              </button>
+            </div>
+          );
+        })}
+        {complete ? (
+          <button onClick={() => setOpen(false)} className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-secondary text-sm font-bold hover-elevate" data-testid={`button-collapse-${e.id}`}>
+            <Check className="h-4 w-4" /> Exercise done
+          </button>
+        ) : (
+          <button onClick={doneAll} className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-bold text-primary-foreground hover-elevate" data-testid={`button-done-all-${e.id}`}>
+            <Check className="h-4 w-4" strokeWidth={3} /> Done — log {todays.length ? `remaining ${e.sets - todays.length} sets` : `all ${e.sets} sets`}
+          </button>
+        )}
       </div>
     </article>
-  );
-}
-
-function Stat({ label, value, icon, small }: { label: string; value: string; icon?: React.ReactNode; small?: boolean }) {
-  return (
-    <div className="rounded-md bg-secondary px-2 py-1.5">
-      <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{icon}{label}</div>
-      <div className={cn("font-mono font-bold tabular-nums leading-tight", small ? "text-xs" : "text-sm")}>{value}</div>
-    </div>
   );
 }
 
@@ -229,13 +237,60 @@ function BlockList({ title, minutes, items, testid }: { title: string; minutes: 
       </button>
       {open && (
         <ul className="divide-y border-t px-4">
-          {items.map((b) => (
-            <li key={b.name} className="flex items-center justify-between py-2 text-sm">
-              <span>{b.name}</span><span className="font-mono text-xs text-muted-foreground">{b.detail}</span>
-            </li>
-          ))}
+          {items.map((b) => <li key={b.name} className="flex items-center justify-between py-2 text-sm"><span>{b.name}</span><span className="font-mono text-xs text-muted-foreground">{b.detail}</span></li>)}
         </ul>
       )}
+    </section>
+  );
+}
+
+/* ---------- Finish workout ---------- */
+function FinishCard({ day, date, sets, all }: { day: number; date: string; sets: SetRec[]; all: Exercise[] }) {
+  const sessions = useStore(liveSessions);
+  const session = sessions.find((s) => s.date === date && s.day === day);
+  const ids = all.map((e) => e.id);
+  const today = sets.filter((s) => s.date === date && ids.includes(s.exerciseId));
+  const vol = Math.round(today.reduce((a, s) => a + s.weight * s.reps, 0));
+  const exDone = all.filter((e) => today.filter((s) => s.exerciseId === e.id).length >= e.sets).length;
+
+  // last week's same-day volume
+  const wk = weekKey(date);
+  const prevDates = Array.from(new Set(sets.filter((s) => s.day === day && weekKey(s.date) < wk).map((s) => s.date))).sort();
+  const lastDate = prevDates[prevDates.length - 1];
+  const lastVol = lastDate ? Math.round(sets.filter((s) => s.date === lastDate && ids.includes(s.exerciseId)).reduce((a, s) => a + s.weight * s.reps, 0)) : 0;
+  const diff = lastVol ? Math.round(((vol - lastVol) / lastVol) * 100) : null;
+
+  if (session) {
+    const t = new Date(session.finishedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return (
+      <section className="rounded-xl border border-primary bg-primary/10 p-4" data-testid="card-finished">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground"><Trophy className="h-5 w-5" /></span>
+          <div className="flex-1">
+            <div className="font-bold">Workout complete · {t}</div>
+            <div className="font-mono text-xs text-muted-foreground">{session.exercises}/{all.length} exercises · {session.sets} sets · {session.volume.toLocaleString()} lb</div>
+          </div>
+          <button onClick={() => reopenSession(session.id)} className="flex h-9 items-center gap-1 rounded-md bg-background px-2.5 text-xs font-medium hover-elevate" data-testid="button-reopen"><RotateCcw className="h-3.5 w-3.5" />Undo</button>
+        </div>
+        {diff !== null && (
+          <div className="mt-2 text-sm"><span className={cn("font-bold", diff >= 0 ? "text-primary" : "text-chart-2")}>{diff >= 0 ? "+" : ""}{diff}%</span> <span className="text-muted-foreground">total weight vs last week ({lastVol.toLocaleString()} lb)</span></div>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-xl border bg-card p-4" data-testid="card-finish">
+      <div className="mb-3 grid grid-cols-3 gap-2 text-center">
+        <div><div className="font-mono text-lg font-bold">{exDone}/{all.length}</div><div className="text-[11px] text-muted-foreground">exercises</div></div>
+        <div><div className="font-mono text-lg font-bold">{today.length}</div><div className="text-[11px] text-muted-foreground">sets</div></div>
+        <div><div className="font-mono text-lg font-bold">{vol.toLocaleString()}</div><div className="text-[11px] text-muted-foreground">lb lifted</div></div>
+      </div>
+      <button disabled={!today.length} onClick={() => finishSession(date, day)}
+        className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-primary text-base font-bold text-primary-foreground hover-elevate disabled:opacity-40" data-testid="button-finish-workout">
+        <Trophy className="h-5 w-5" /> Finish workout
+      </button>
+      <p className="mt-2 text-center text-xs text-muted-foreground">{today.length ? "Saves the session and syncs to your sheet" : "Log at least one set first"}</p>
     </section>
   );
 }
@@ -247,13 +302,20 @@ export default function DayPage() {
   const n = params ? Number(params.n) : t.n;
   const plan = PLAN.find((d) => d.n === n) ?? PLAN[0];
   const date = todayISO();
-  const { data: logs = [], isLoading } = useQuery<SetLog[]>({ queryKey: ["/api/sets"] });
+  const sets = useStore(liveSets);
 
   const all = [...plan.main, plan.finisher];
   const totalSets = all.reduce((a, e) => a + e.sets, 0);
-  const doneSets = useMemo(() => logs.filter((l) => l.date === date && all.some((e) => e.id === l.exerciseId)).length, [logs, date, n]);
+  const doneSets = sets.filter((l) => l.date === date && all.some((e) => e.id === l.exerciseId)).length;
   const pct = Math.round((doneSets / totalSets) * 100);
   const isToday = !t.rest && t.n === n;
+
+  // last week's best for this day (motivation line)
+  const wk = weekKey(date);
+  const lastWeekTops = plan.main.filter((e) => e.unit === "lb").map((e) => {
+    const prev = previousFor(sets, e.id, date);
+    return prev?.lastWeek ? { name: e.name.split(" ").slice(-2).join(" "), w: prev.top.weight } : null;
+  }).filter(Boolean) as { name: string; w: number }[];
 
   const timeline = [
     { label: "Warm-up", min: 5, cls: "bg-muted-foreground/40" },
@@ -264,7 +326,6 @@ export default function DayPage() {
 
   return (
     <div className="space-y-3">
-      {/* Header */}
       <section className="rounded-xl border bg-card p-4" data-testid="section-day-header">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -274,15 +335,12 @@ export default function DayPage() {
               {t.rest && t.n === n && <span className="rounded bg-secondary px-1.5 py-0.5">Rest day · next up</span>}
             </div>
             <h1 className="mt-1 text-xl font-bold leading-tight" data-testid="text-day-title">{plan.title}</h1>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {plan.muscles.map((m) => <span key={m} className="rounded-md bg-secondary px-2 py-0.5 text-xs font-medium">{m}</span>)}
-            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">{plan.muscles.map((m) => <span key={m} className="rounded-md bg-secondary px-2 py-0.5 text-xs font-medium">{m}</span>)}</div>
           </div>
           <div className="relative h-16 w-16 shrink-0" aria-label={`${pct}% of sets done`} data-testid="status-progress">
             <svg viewBox="0 0 36 36" className="h-16 w-16 -rotate-90">
               <circle cx="18" cy="18" r="15.5" fill="none" stroke="hsl(var(--muted))" strokeWidth="3.5" />
-              <circle cx="18" cy="18" r="15.5" fill="none" stroke="hsl(var(--primary))" strokeWidth="3.5" strokeLinecap="round"
-                strokeDasharray={`${(pct / 100) * 97.4} 97.4`} className="transition-all duration-500" />
+              <circle cx="18" cy="18" r="15.5" fill="none" stroke="hsl(var(--primary))" strokeWidth="3.5" strokeLinecap="round" strokeDasharray={`${(pct / 100) * 97.4} 97.4`} className="transition-all duration-500" />
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <span className="font-mono text-sm font-bold leading-none">{doneSets}</span>
@@ -291,28 +349,24 @@ export default function DayPage() {
           </div>
         </div>
         <div className="mt-3">
-          <div className="flex h-2 overflow-hidden rounded-full">
-            {timeline.map((s) => <div key={s.label} className={s.cls} style={{ width: `${(s.min / 60) * 100}%` }} />)}
-          </div>
-          <div className="mt-1.5 flex justify-between text-[11px] text-muted-foreground">
-            {timeline.map((s) => <span key={s.label}><span className="font-mono font-bold text-foreground">{s.min}′</span> {s.label}</span>)}
-          </div>
+          <div className="flex h-2 overflow-hidden rounded-full">{timeline.map((s) => <div key={s.label} className={s.cls} style={{ width: `${(s.min / 60) * 100}%` }} />)}</div>
+          <div className="mt-1.5 flex justify-between text-[11px] text-muted-foreground">{timeline.map((s) => <span key={s.label}><span className="font-mono font-bold text-foreground">{s.min}′</span> {s.label}</span>)}</div>
         </div>
+        {lastWeekTops.length > 0 && (
+          <div className="mt-3 flex items-center gap-2 overflow-x-auto rounded-lg bg-secondary px-2.5 py-2 text-xs" data-testid="strip-lastweek">
+            <TrendingUp className="h-3.5 w-3.5 shrink-0 text-primary" />
+            <span className="shrink-0 font-bold">Last wk — beat it:</span>
+            {lastWeekTops.map((x) => <span key={x.name} className="shrink-0 whitespace-nowrap text-muted-foreground">{x.name} <span className="font-mono font-bold text-foreground">{x.w}</span></span>)}
+          </div>
+        )}
       </section>
 
       <BlockList title="Warm-up" minutes="5 min" items={plan.warmup} testid="section-warmup" />
-
-      {isLoading
-        ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-80 animate-pulse rounded-xl bg-card" />)
-        : (
-          <>
-            {plan.main.map((e, i) => <ExerciseCard key={e.id} e={e} n={i + 1} day={plan.n} date={date} logs={logs} />)}
-            <div className="flex items-center gap-2 pt-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><Flame className="h-3.5 w-3.5 text-chart-2" /> Finisher</div>
-            <ExerciseCard e={plan.finisher} n={7} tag="F" day={plan.n} date={date} logs={logs} />
-          </>
-        )}
-
+      {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} />)}
+      <div className="flex items-center gap-2 pt-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><Flame className="h-3.5 w-3.5 text-chart-2" /> Finisher</div>
+      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} />
       <BlockList title="Stretch" minutes="2 min" items={plan.stretch} testid="section-stretch" />
+      <FinishCard day={plan.n} date={date} sets={sets} all={all} />
     </div>
   );
 }

@@ -1,11 +1,9 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Area, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Scale, Dumbbell, CalendarCheck, TrendingUp, ChevronRight } from "lucide-react";
-import type { Bodyweight, SetLog } from "@shared/schema";
 import { ALL_EXERCISES, MUSCLES, PLAN, PROFILE, todayISO, weekKey } from "@/data/plan";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useStore, liveSets, liveBw, logBodyweight } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const axis = { stroke: "hsl(var(--muted-foreground))", fontSize: 11, tickLine: false, axisLine: false } as const;
@@ -41,8 +39,8 @@ function Empty({ text }: { text: string }) {
 }
 
 export default function ProgressPage() {
-  const { data: logs = [] } = useQuery<SetLog[]>({ queryKey: ["/api/sets"] });
-  const { data: bws = [] } = useQuery<Bodyweight[]>({ queryKey: ["/api/bodyweights"] });
+  const logs = useStore(liveSets);
+  const bws = useStore(liveBw);
   const today = todayISO();
   const thisWeek = weekKey(today);
 
@@ -55,7 +53,7 @@ export default function ProgressPage() {
   const weekSessions = sessions.filter((s) => weekKey(s.date) === thisWeek);
   const latestBw = bws.length ? bws[bws.length - 1] : null;
   const firstBw = bws.length ? bws[0] : null;
-  const gain = latestBw ? latestBw.kg - PROFILE.startKg : 0;
+  const gain = latestBw && firstBw ? latestBw.kg - firstBw.kg : 0;
   const weeksIn = firstBw && latestBw ? Math.max(daysBetween(firstBw.date, latestBw.date) / 7, 0) : 0;
   const perWeek = weeksIn >= 1 && firstBw && latestBw ? (latestBw.kg - firstBw.kg) / weeksIn : null;
 
@@ -113,17 +111,14 @@ export default function ProgressPage() {
 
   /* Bodyweight form */
   const [kg, setKg] = useState("");
-  const saveBw = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/bodyweights", { date: today, kg: Number(kg) })).json(),
-    onSuccess: () => { setKg(""); queryClient.invalidateQueries({ queryKey: ["/api/bodyweights"] }); },
-  });
+  const saveBw = { mutate: () => { logBodyweight(Number(kg), today); setKg(""); }, isPending: false };
 
   return (
     <div className="space-y-3">
       <h1 className="text-xl font-bold">Progress</h1>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Kpi testid="kpi-bodyweight" icon={<Scale className="h-3.5 w-3.5" />} label="Bodyweight" value={latestBw ? `${latestBw.kg} kg` : `${PROFILE.startKg} kg`} sub={`${gain >= 0 ? "+" : ""}${gain.toFixed(1)} kg from 61`} />
+        <Kpi testid="kpi-bodyweight" icon={<Scale className="h-3.5 w-3.5" />} label="Bodyweight" value={latestBw ? `${latestBw.kg} kg` : "—"} sub={firstBw ? `${gain >= 0 ? "+" : ""}${gain.toFixed(1)} kg since ${short(firstBw.date)}` : "Log your weight below"} />
         <Kpi testid="kpi-rate" icon={<TrendingUp className="h-3.5 w-3.5" />} label="Gain / week" value={perWeek != null ? `${perWeek >= 0 ? "+" : ""}${perWeek.toFixed(2)}` : "—"} sub="Target +0.25–0.5 kg" />
         <Kpi testid="kpi-week" icon={<CalendarCheck className="h-3.5 w-3.5" />} label="This week" value={`${weekSessions.length}/4`} sub="workouts" />
         <Kpi testid="kpi-total" icon={<Dumbbell className="h-3.5 w-3.5" />} label="All time" value={`${sessions.length}`} sub={`${logs.length} sets logged`} />

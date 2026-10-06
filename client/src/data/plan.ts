@@ -593,8 +593,6 @@ export const MUSCLES: Muscle[] = [
 ];
 
 export const PROFILE = {
-  startKg: 61,
-  heightCm: 170,
   weeklyGainKg: [0.25, 0.5] as [number, number],
 };
 

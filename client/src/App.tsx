@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
 import DayPage from "@/pages/day";
 import ProgressPage from "@/pages/progress";
+import SettingsPage from "@/pages/settings";
 import { Shell } from "@/components/shell";
 
 function AppRouter() {
@@ -16,6 +17,7 @@ function AppRouter() {
         <Route path="/" component={DayPage} />
         <Route path="/day/:n" component={DayPage} />
         <Route path="/progress" component={ProgressPage} />
+        <Route path="/settings" component={SettingsPage} />
         <Route component={NotFound} />
       </Switch>
     </Shell>

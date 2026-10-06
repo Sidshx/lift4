@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { BarChart3, Moon, Sun, Pause, Play, X, Plus } from "lucide-react";
+import { BarChart3, Moon, Sun, Pause, Play, X, Plus, Cloud, CloudOff, RefreshCw, Settings } from "lucide-react";
+import { useStore, pendingCount } from "@/lib/store";
 import { PLAN, todaysDay } from "@/data/plan";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +77,21 @@ function RestBar({ total, left, label, paused, onPause, onAdd, onClose }: {
   );
 }
 
+/* ---------- Sync badge ---------- */
+function SyncBadge() {
+  const status = useStore((s) => s.status);
+  const pending = useStore((s) => pendingCount(s));
+  const label = status === "off" ? "Set up sync" : status === "synced" ? "Synced" : status === "syncing" ? "Syncing" : status === "offline" ? `Offline · ${pending}` : status === "error" ? "Retrying" : `${pending} to sync`;
+  const Icon = status === "off" ? Settings : status === "offline" ? CloudOff : status === "syncing" ? RefreshCw : Cloud;
+  return (
+    <Link href="/settings" className={cn("ml-auto flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium hover-elevate",
+      status === "synced" ? "text-primary" : status === "error" ? "text-chart-2" : "text-muted-foreground")} data-testid="link-sync-status">
+      <Icon className={cn("h-4 w-4", status === "syncing" && "animate-spin")} />
+      <span>{label}</span>
+    </Link>
+  );
+}
+
 /* ---------- Shell ---------- */
 export function Shell({ children }: { children: ReactNode }) {
   const { dark, toggle } = useTheme();
@@ -115,14 +131,15 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <TimerContext.Provider value={{ start }}>
       <div className="min-h-dvh bg-background text-foreground">
-        <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur">
+        <header className="sticky top-0 z-30 border-b bg-background/85 pt-[env(safe-area-inset-top)] backdrop-blur">
           <div className="mx-auto flex h-14 max-w-3xl items-center gap-2 px-4">
             <Link href="/" className="flex items-center gap-2" data-testid="link-home">
               <Logo className="h-7 w-7 text-foreground" />
               <span className="text-base font-bold tracking-tight">Lift<span className="text-primary">4</span></span>
             </Link>
             <span className="ml-2 hidden text-xs text-muted-foreground sm:inline">4 days · 60 min · muscle + weight</span>
-            <button onClick={toggle} aria-label="Toggle theme" className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg hover-elevate" data-testid="button-theme">
+            <SyncBadge />
+            <button onClick={toggle} aria-label="Toggle theme" className=" flex h-9 w-9 items-center justify-center rounded-lg hover-elevate" data-testid="button-theme">
               {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
           </div>
