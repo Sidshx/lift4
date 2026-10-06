@@ -10,7 +10,15 @@ var TABS = {
 };
 
 function doGet() {
-  return json_({ ok: true, app: 'lift4', sheet: SpreadsheetApp.getActive().getUrl() });
+  var ss = SpreadsheetApp.getActive();
+  var fb = ss.getSheetByName('Fitbit'), fitbit = [];
+  if (fb && fb.getLastRow() > 1) {
+    var n = Math.min(14, fb.getLastRow() - 1);
+    fitbit = fb.getRange(fb.getLastRow() - n + 1, 1, n, 13).getDisplayValues().map(function (r) {
+      return { date: r[0], sleep: r[1], deep: r[2], score: r[4], hrv: r[5], rhr: r[6], steps: r[7], readiness: r[11], tip: r[12] };
+    });
+  }
+  return json_({ ok: true, app: 'lift4', sheet: ss.getUrl(), fitbit: fitbit });
 }
 
 function doPost(e) {

@@ -1,5 +1,5 @@
 import { PLAN, weekKey } from "@/data/plan";
-import { exInfo, getState, markSynced, setChangeHandler, setStatus, setSheetUrl } from "@/lib/store";
+import { exInfo, getState, markSynced, setChangeHandler, setStatus, setSheetUrl, setFitbit } from "@/lib/store";
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
@@ -63,10 +63,22 @@ export async function testUrl(url: string): Promise<string | null> {
     const res = await fetch(url, { method: "GET", redirect: "follow" });
     const json = await res.json();
     if (json.ok && json.app === "lift4" && json.sheet) setSheetUrl(json.sheet);
+    if (json.ok && Array.isArray(json.fitbit)) setFitbit(json.fitbit);
     return json.ok && json.app === "lift4" ? null : "That link didn't answer like the Lift4 script.";
   } catch {
     return "Couldn't reach that link. Check it's the Web app URL ending in /exec and access is 'Anyone'.";
   }
+}
+
+let lastPull = 0;
+export async function pullFitbit() {
+  const s = getState();
+  if (!s.syncUrl || !navigator.onLine || Date.now() - lastPull < 10 * 60 * 1000) return;
+  lastPull = Date.now();
+  try {
+    const json = await (await fetch(s.syncUrl, { redirect: "follow" })).json();
+    if (json.ok && Array.isArray(json.fitbit)) setFitbit(json.fitbit);
+  } catch {}
 }
 
 function schedule(ms = 2500) {
@@ -83,7 +95,8 @@ export function startSync() {
   });
   window.addEventListener("online", () => schedule(500));
   window.addEventListener("offline", () => getState().syncUrl && setStatus("offline"));
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") schedule(800); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { schedule(800); pullFitbit(); } });
   setInterval(() => { const s = getState(); if (s.syncUrl && s.status !== "synced") syncNow(); }, 60000);
   schedule(1000);
+  pullFitbit();
 }

@@ -26,6 +26,7 @@ export type SessionRec = {
   deleted?: boolean;
 };
 export type BwRec = { id: string; date: string; kg: number; ts: number; dirty?: boolean; deleted?: boolean };
+export type FitbitDay = { date: string; sleep: string; deep: string; score: string; hrv: string; rhr: string; steps: string; readiness: string; tip: string };
 export type SyncStatus = "off" | "synced" | "pending" | "syncing" | "offline" | "error";
 
 type State = {
@@ -34,6 +35,7 @@ type State = {
   bodyweights: BwRec[];
   syncUrl: string;
   sheetUrl: string;
+  fitbit: FitbitDay[];
   lastSync: number | null;
   status: SyncStatus;
   lastError: string;
@@ -56,7 +58,7 @@ const storage = typeof window !== "undefined" ? getStorage() : null;
 export const persistent = !!storage;
 
 function load(): State {
-  const base: State = { sets: [], sessions: [], bodyweights: [], syncUrl: "", sheetUrl: "", lastSync: null, status: "off", lastError: "" };
+  const base: State = { sets: [], sessions: [], bodyweights: [], syncUrl: "", sheetUrl: "", fitbit: [], lastSync: null, status: "off", lastError: "" };
   try {
     const raw = storage?.getItem(KEY);
     if (raw) {
@@ -154,6 +156,10 @@ export function setSyncUrl(url: string) {
     sessions: state.sessions.map((s) => ({ ...s, dirty: true })),
     bodyweights: state.bodyweights.map((b) => ({ ...b, dirty: true })),
   });
+}
+
+export function setFitbit(fitbit: FitbitDay[]) {
+  set({ fitbit }, true, false);
 }
 
 export function setSheetUrl(sheetUrl: string) {

@@ -266,6 +266,29 @@ function FinishCard({ day, date, sets, all, registry }: { day: number; date: str
   );
 }
 
+/* ---------- Fitbit readiness ---------- */
+function TodayCard() {
+  const fitbit = useStore((s) => s.fitbit);
+  const last = fitbit[fitbit.length - 1];
+  if (!last?.readiness) return null;
+  const today = todayISO();
+  const y = new Date(); y.setDate(y.getDate() - 1);
+  if (last.date !== today && last.date !== todayISO(y)) return null;
+  const tone = last.readiness === "Green" ? "bg-primary" : last.readiness === "Yellow" ? "bg-chart-4" : "bg-chart-2";
+  const [head, why] = last.tip.split(" (");
+  return (
+    <section className="flex items-center gap-3 rounded-xl border bg-card px-4 py-3" data-testid="card-today-fitbit">
+      <span className={cn("h-3 w-3 shrink-0 rounded-full", tone)} aria-label={`Readiness ${last.readiness}`} />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-bold">{head}</div>
+        <div className="truncate font-mono text-xs text-muted-foreground">
+          {last.sleep}h sleep · HRV {last.hrv} · RHR {last.rhr}{why ? ` · ${why.replace(")", "")}` : ""}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /* ---------- Page ---------- */
 export default function DayPage() {
   const [, params] = useRoute("/day/:n");
@@ -333,6 +356,7 @@ export default function DayPage() {
         )}
       </section>
 
+      <TodayCard />
       <BlockList title="Warm-up" minutes="5 min" items={plan.warmup} testid="section-warmup" />
       {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} registry={registry} />)}
       <div className="flex items-center gap-2 pt-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><Flame className="h-3.5 w-3.5 text-chart-2" /> Finisher</div>
