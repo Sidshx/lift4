@@ -9,7 +9,8 @@ var TABS = {
   Bodyweight: { cols: 5,  id: 5 }   // Date|Week|kg|Change|ID
 };
 
-function doGet() {
+function doGet(e) {
+  if (e && e.parameter && e.parameter.refresh) return json_(requestFitbit_());
   var ss = SpreadsheetApp.getActive();
   var fb = ss.getSheetByName('Fitbit'), fitbit = [];
   if (fb && fb.getLastRow() > 1) {
@@ -94,4 +95,15 @@ function json_(o) {
 /** Run once from the editor to approve permissions. */
 function authorize() {
   SpreadsheetApp.getActive().getName();
+  MailApp.getRemainingDailyQuota(); // lets the Fitbit sync button send its signal email
+}
+
+// Manual Fitbit sync: emails yourself a signal that starts the Lift4 Fitbit sync task.
+function requestFitbit_() {
+  var props = PropertiesService.getScriptProperties();
+  var last = Number(props.getProperty('fitbitReq') || 0);
+  if (Date.now() - last < 5 * 60 * 1000) return { ok: true, requested: false, wait: Math.ceil((5 * 60 * 1000 - (Date.now() - last)) / 60000) };
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'Lift4 Fitbit sync request', 'Sent by the Lift4 app to start a Fitbit sync. Safe to delete.');
+  props.setProperty('fitbitReq', String(Date.now()));
+  return { ok: true, requested: true };
 }

@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { Check, Cloud, CloudOff, Copy, Download, ExternalLink, RefreshCw, Upload, Smartphone, AlertTriangle } from "lucide-react";
 import code from "../../../apps-script/Code.gs?raw";
 import { useStore, setSyncUrl, pendingCount, exportJSON, importJSON, persistent } from "@/lib/store";
-import { syncNow, testUrl } from "@/lib/sync";
+import { syncNow, testUrl, requestFitbitSync } from "@/lib/sync";
+import { Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 
@@ -12,6 +13,31 @@ function Section({ title, children, testid }: { title: string; children: React.R
       <h2 className="mb-3 text-sm font-bold">{title}</h2>
       {children}
     </section>
+  );
+}
+
+function FitbitSection() {
+  const url = useStore((s) => s.syncUrl);
+  const fitbit = useStore((s) => s.fitbit);
+  const last = fitbit[fitbit.length - 1];
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const run = () => {
+    setBusy(true);
+    requestFitbitSync((m, done) => { setMsg(m); if (done) setBusy(false); });
+  };
+  return (
+    <Section title="Fitbit" testid="section-fitbit">
+      <div className="flex items-center gap-2">
+        <button onClick={run} disabled={!url || busy} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-md bg-primary text-sm font-bold text-primary-foreground disabled:opacity-50" data-testid="button-fitbit-sync">
+          <Activity className={cn("h-4 w-4", busy && "animate-pulse")} />{busy ? "Syncing…" : "Sync Fitbit now"}
+        </button>
+      </div>
+      {msg && <p className="mt-2 text-sm text-primary" data-testid="text-fitbit-msg">{msg}</p>}
+      <p className="mt-2 text-xs text-muted-foreground">
+        Auto-sync daily at 3 PM. {last ? `Latest data: ${last.date}.` : "No Fitbit data yet."} Open the Fitbit app first so your watch data is uploaded.
+      </p>
+    </Section>
   );
 }
 
@@ -85,6 +111,8 @@ export default function SettingsPage() {
         {msg && <p className={cn("mt-2 text-sm", msg.ok ? "text-primary" : "text-chart-2")} data-testid="text-sync-msg">{msg.text}</p>}
         <p className="mt-2 text-xs text-muted-foreground">Data is saved on this phone first. It syncs in the background when you're online.</p>
       </Section>
+
+      <FitbitSection />
 
       <Section title="One-time sheet setup (desktop, 3 min)" testid="section-setup">
         <ol className="space-y-1.5 text-sm">

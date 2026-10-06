@@ -71,14 +71,37 @@ export async function testUrl(url: string): Promise<string | null> {
 }
 
 let lastPull = 0;
-export async function pullFitbit() {
+export async function pullFitbit(force = false) {
   const s = getState();
-  if (!s.syncUrl || !navigator.onLine || Date.now() - lastPull < 10 * 60 * 1000) return;
+  if (!s.syncUrl || !navigator.onLine || (!force && Date.now() - lastPull < 10 * 60 * 1000)) return;
   lastPull = Date.now();
   try {
     const json = await (await fetch(s.syncUrl, { redirect: "follow" })).json();
     if (json.ok && Array.isArray(json.fitbit)) setFitbit(json.fitbit);
   } catch {}
+}
+
+/** Ask the sheet to start a Fitbit sync, then poll for fresh rows for ~4 min. */
+export async function requestFitbitSync(onUpdate: (msg: string, done?: boolean) => void) {
+  const s = getState();
+  if (!s.syncUrl) return onUpdate("Connect the sheet first.", true);
+  if (!navigator.onLine) return onUpdate("You're offline.", true);
+  try {
+    const json = await (await fetch(s.syncUrl + (s.syncUrl.includes("?") ? "&" : "?") + "refresh=1", { redirect: "follow" })).json();
+    if (!json.ok) throw new Error();
+    if (json.requested === false) onUpdate(`Sync already requested. Checking for new data…`);
+    else if (json.requested !== true) return onUpdate("Update the sheet script (Settings → setup) to enable this.", true);
+    else onUpdate("Sync started. New data in about 1–3 min…");
+  } catch {
+    return onUpdate("Couldn't reach the sheet.", true);
+  }
+  const before = JSON.stringify(getState().fitbit.slice(-2));
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 30000));
+    await pullFitbit(true);
+    if (JSON.stringify(getState().fitbit.slice(-2)) !== before) return onUpdate("Fitbit data updated.", true);
+  }
+  onUpdate("No new data yet. Open the Fitbit app to sync your watch, then try again.", true);
 }
 
 function schedule(ms = 2500) {

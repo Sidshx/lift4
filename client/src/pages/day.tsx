@@ -271,16 +271,16 @@ function TodayCard() {
   const fitbit = useStore((s) => s.fitbit);
   const last = fitbit[fitbit.length - 1];
   if (!last?.readiness) return null;
-  const today = todayISO();
-  const y = new Date(); y.setDate(y.getDate() - 1);
-  if (last.date !== today && last.date !== todayISO(y)) return null;
-  const tone = last.readiness === "Green" ? "bg-primary" : last.readiness === "Yellow" ? "bg-chart-4" : "bg-chart-2";
+  const fresh = last.date === todayISO();
+  const age = Math.round((new Date(todayISO()).getTime() - new Date(last.date).getTime()) / 86400000);
+  if (age > 3) return null;
+  const tone = !fresh ? "bg-muted-foreground" : last.readiness === "Green" ? "bg-primary" : last.readiness === "Yellow" ? "bg-chart-4" : "bg-chart-2";
   const [head, why] = last.tip.split(" (");
   return (
-    <section className="flex items-center gap-3 rounded-xl border bg-card px-4 py-3" data-testid="card-today-fitbit">
+    <section className={cn("flex items-center gap-3 rounded-xl border bg-card px-4 py-3", !fresh && "opacity-60")} data-testid="card-today-fitbit">
       <span className={cn("h-3 w-3 shrink-0 rounded-full", tone)} aria-label={`Readiness ${last.readiness}`} />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-bold">{head}</div>
+        <div className="text-sm font-bold">{fresh ? head : `${age === 1 ? "Yesterday" : `${age} days ago`} · waiting for today's sync`}</div>
         <div className="truncate font-mono text-xs text-muted-foreground">
           {last.sleep}h sleep · HRV {last.hrv} · RHR {last.rhr}{why ? ` · ${why.replace(")", "")}` : ""}
         </div>
