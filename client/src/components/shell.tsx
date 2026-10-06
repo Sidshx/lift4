@@ -27,8 +27,8 @@ function useTheme() {
 }
 
 /* ---------- Rest timer ---------- */
-type TimerCtx = { start: (sec: number, label: string) => void };
-const TimerContext = createContext<TimerCtx>({ start: () => {} });
+type TimerCtx = { start: (sec: number, label: string) => void; stop: () => void };
+const TimerContext = createContext<TimerCtx>({ start: () => {}, stop: () => {} });
 export const useRestTimer = () => useContext(TimerContext);
 
 function beep() {
@@ -129,7 +129,7 @@ export function Shell({ children }: { children: ReactNode }) {
   ];
 
   return (
-    <TimerContext.Provider value={{ start }}>
+    <TimerContext.Provider value={{ start, stop: () => setTimer(null) }}>
       <div className="min-h-dvh bg-background text-foreground">
         <header className="sticky top-0 z-30 border-b bg-background/85 pt-[env(safe-area-inset-top)] backdrop-blur">
           <div className="mx-auto flex h-14 max-w-3xl items-center gap-2 px-4">

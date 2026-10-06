@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRoute } from "wouter";
-import { ArrowDown, ArrowUp, Check, ChevronDown, Clock, Flame, Target, TrendingUp, Wind, Trophy, RotateCcw, Pencil } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, Clock, Flame, Target, TrendingUp, Wind, Trophy, RotateCcw } from "lucide-react";
 import { PLAN, imgSrc, todayISO, todaysDay, weekKey, type Exercise, type Block } from "@/data/plan";
 import { useStore, liveSets, liveSessions, logSet, logSets, unlogSet, finishSession, reopenSession, previousFor, type SetRec } from "@/lib/store";
 import { useRestTimer } from "@/components/shell";
@@ -58,15 +58,14 @@ function Stat({ label, value, icon, small }: { label: string; value: string; ico
 }
 
 /* ---------- Exercise card ---------- */
-function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; day: number; date: string; sets: SetRec[]; tag?: string }) {
+type Registry = Map<string, () => Omit<SetRec, "id" | "ts" | "dirty" | "deleted">[]>;
+function ExerciseCard({ e, n, day, date, sets, tag, registry }: { e: Exercise; n: number; day: number; date: string; sets: SetRec[]; tag?: string; registry: Registry }) {
   const timer = useRestTimer();
   const todays = sets.filter((l) => l.exerciseId === e.id && l.date === date);
   const prev = useMemo(() => previousFor(sets, e.id, date), [sets, e.id, date]);
   const target = nextTarget(e, prev);
   const defaultW = target?.weight ? String(target.weight) : "";
   const complete = todays.length >= e.sets;
-  const [open, setOpen] = useState(!complete);
-  useEffect(() => { if (complete) setOpen(false); }, [complete]);
 
   const [vals, setVals] = useState(() =>
     Array.from({ length: e.sets }, (_, i) => {
@@ -97,33 +96,13 @@ function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; 
     else timer.start(Math.max(e.rest, 90), "Next exercise");
   };
 
-  const doneAll = () => {
-    const missing = Array.from({ length: e.sets }, (_, i) => i).filter((i) => !todays.some((t) => t.setIndex === i));
-    logSets(missing.map(rec));
-    timer.start(Math.max(e.rest, 90), "Next exercise");
-    setOpen(false);
-  };
-
-  const summary = todays.length
-    ? e.unit === "lb"
-      ? `${todays.length} × ${Math.max(...todays.map((t) => t.weight))} lb · ${todays.map((t) => t.reps).join("/")}`
-      : `${todays.length} sets · ${todays.map((t) => t.reps).join("/")}${e.unit === "sec" ? "s" : ""}`
-    : "";
-
-  /* compact completed row */
-  if (complete && !open) {
-    return (
-      <article className="flex items-center gap-3 rounded-xl border border-primary/50 bg-card px-3 py-3" data-testid={`card-exercise-${e.id}`}>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground"><Check className="h-4 w-4" strokeWidth={3} /></span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-bold">{e.name}</div>
-          <div className="truncate font-mono text-xs text-muted-foreground" data-testid={`text-summary-${e.id}`}>{summary}</div>
-        </div>
-        {prev && todays.some((t) => t.weight > prev.top.weight) && <Trophy className="h-4 w-4 text-chart-4" aria-label="Heavier than last week" />}
-        <button onClick={() => setOpen(true)} className="flex h-9 items-center gap-1 rounded-md bg-secondary px-2.5 text-xs font-medium hover-elevate" data-testid={`button-edit-${e.id}`}><Pencil className="h-3.5 w-3.5" />Edit</button>
-      </article>
-    );
-  }
+  // Unticked sets with values are logged by the single "Finish workout" button.
+  registry.set(e.id, () =>
+    Array.from({ length: e.sets }, (_, i) => i)
+      .filter((i) => !todays.some((t) => t.setIndex === i))
+      .filter((i) => e.unit !== "lb" || Number(vals[i].w) > 0)
+      .map(rec),
+  );
 
   return (
     <article className={cn("rounded-xl border bg-card p-3 sm:p-4", complete && "border-primary/60")} data-testid={`card-exercise-${e.id}`}>
@@ -211,15 +190,6 @@ function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; 
             </div>
           );
         })}
-        {complete ? (
-          <button onClick={() => setOpen(false)} className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-secondary text-sm font-bold hover-elevate" data-testid={`button-collapse-${e.id}`}>
-            <Check className="h-4 w-4" /> Exercise done
-          </button>
-        ) : (
-          <button onClick={doneAll} className="mt-2 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-bold text-primary-foreground hover-elevate" data-testid={`button-done-all-${e.id}`}>
-            <Check className="h-4 w-4" strokeWidth={3} /> Done — log {todays.length ? `remaining ${e.sets - todays.length} sets` : `all ${e.sets} sets`}
-          </button>
-        )}
       </div>
     </article>
   );
@@ -245,7 +215,8 @@ function BlockList({ title, minutes, items, testid }: { title: string; minutes: 
 }
 
 /* ---------- Finish workout ---------- */
-function FinishCard({ day, date, sets, all }: { day: number; date: string; sets: SetRec[]; all: Exercise[] }) {
+function FinishCard({ day, date, sets, all, registry }: { day: number; date: string; sets: SetRec[]; all: Exercise[]; registry: Registry }) {
+  const timer = useRestTimer();
   const sessions = useStore(liveSessions);
   const session = sessions.find((s) => s.date === date && s.day === day);
   const ids = all.map((e) => e.id);
@@ -286,11 +257,11 @@ function FinishCard({ day, date, sets, all }: { day: number; date: string; sets:
         <div><div className="font-mono text-lg font-bold">{today.length}</div><div className="text-[11px] text-muted-foreground">sets</div></div>
         <div><div className="font-mono text-lg font-bold">{vol.toLocaleString()}</div><div className="text-[11px] text-muted-foreground">lb lifted</div></div>
       </div>
-      <button disabled={!today.length} onClick={() => finishSession(date, day)}
+      <button onClick={() => { const pending = Array.from(registry.values()).flatMap((f) => f()); if (pending.length) logSets(pending); finishSession(date, day); timer.stop(); }}
         className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-primary text-base font-bold text-primary-foreground hover-elevate disabled:opacity-40" data-testid="button-finish-workout">
-        <Trophy className="h-5 w-5" /> Finish workout
+        <Check className="h-5 w-5" strokeWidth={3} /> Workout done
       </button>
-      <p className="mt-2 text-center text-xs text-muted-foreground">{today.length ? "Saves the session and syncs to your sheet" : "Log at least one set first"}</p>
+      <p className="mt-2 text-center text-xs text-muted-foreground">Logs every set you filled in and marks today done</p>
     </section>
   );
 }
@@ -303,6 +274,7 @@ export default function DayPage() {
   const plan = PLAN.find((d) => d.n === n) ?? PLAN[0];
   const date = todayISO();
   const sets = useStore(liveSets);
+  const registry = useRef<Registry>(new Map()).current;
 
   const all = [...plan.main, plan.finisher];
   const totalSets = all.reduce((a, e) => a + e.sets, 0);
@@ -362,11 +334,11 @@ export default function DayPage() {
       </section>
 
       <BlockList title="Warm-up" minutes="5 min" items={plan.warmup} testid="section-warmup" />
-      {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} />)}
+      {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} registry={registry} />)}
       <div className="flex items-center gap-2 pt-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><Flame className="h-3.5 w-3.5 text-chart-2" /> Finisher</div>
-      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} />
+      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} registry={registry} />
       <BlockList title="Stretch" minutes="2 min" items={plan.stretch} testid="section-stretch" />
-      <FinishCard day={plan.n} date={date} sets={sets} all={all} />
+      <FinishCard day={plan.n} date={date} sets={sets} all={all} registry={registry} />
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 const root = "dist/public";
 const files = [];
-(function walk(d) { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p) : files.push("./" + relative(root, p)); } })(root);
+(function walk(d) { for (const f of readdirSync(d)) { if (f.startsWith(".")) continue; const p = join(d, f); statSync(p).isDirectory() ? walk(p) : files.push("./" + relative(root, p)); } })(root);
 const list = ["./", ...files.filter((f) => f !== "./sw.js")];
 const version = Date.now().toString(36);
 writeFileSync(join(root, "sw.js"), `const CACHE="lift4-${version}";const FILES=${JSON.stringify(list)};
