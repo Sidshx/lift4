@@ -1,5 +1,5 @@
 import { PLAN, weekKey } from "@/data/plan";
-import { exInfo, getState, markSynced, setChangeHandler, setStatus } from "@/lib/store";
+import { exInfo, getState, markSynced, setChangeHandler, setStatus, setSheetUrl } from "@/lib/store";
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
@@ -62,6 +62,7 @@ export async function testUrl(url: string): Promise<string | null> {
   try {
     const res = await fetch(url, { method: "GET", redirect: "follow" });
     const json = await res.json();
+    if (json.ok && json.app === "lift4" && json.sheet) setSheetUrl(json.sheet);
     return json.ok && json.app === "lift4" ? null : "That link didn't answer like the Lift4 script.";
   } catch {
     return "Couldn't reach that link. Check it's the Web app URL ending in /exec and access is 'Anyone'.";

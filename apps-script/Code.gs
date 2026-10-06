@@ -10,7 +10,7 @@ var TABS = {
 };
 
 function doGet() {
-  return json_({ ok: true, app: 'lift4' });
+  return json_({ ok: true, app: 'lift4', sheet: SpreadsheetApp.getActive().getUrl() });
 }
 
 function doPost(e) {

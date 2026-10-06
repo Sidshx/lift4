@@ -5,7 +5,6 @@ import { useStore, setSyncUrl, pendingCount, exportJSON, importJSON, persistent 
 import { syncNow, testUrl } from "@/lib/sync";
 import { cn } from "@/lib/utils";
 
-export const SHEET_URL = "https://docs.google.com/spreadsheets/d/1QsDFb6f3QFYCylPM66A_ESuyMF-CcTLNGyrqyForKYw/edit";
 
 function Section({ title, children, testid }: { title: string; children: React.ReactNode; testid: string }) {
   return (
@@ -18,6 +17,7 @@ function Section({ title, children, testid }: { title: string; children: React.R
 
 export default function SettingsPage() {
   const url = useStore((s) => s.syncUrl);
+  const sheetUrl = useStore((s) => s.sheetUrl);
   const status = useStore((s) => s.status);
   const lastSync = useStore((s) => s.lastSync);
   const lastError = useStore((s) => s.lastError);
@@ -80,7 +80,7 @@ export default function SettingsPage() {
         <div className="mt-2 flex gap-2">
           <button onClick={connect} disabled={!draft.trim() || busy} className="h-10 flex-1 rounded-md bg-primary text-sm font-bold text-primary-foreground disabled:opacity-50" data-testid="button-connect">{busy ? "Checking…" : url ? "Save & sync" : "Connect"}</button>
           <button onClick={() => syncNow()} disabled={!url} className="flex h-10 items-center gap-1.5 rounded-md bg-secondary px-3 text-sm font-medium disabled:opacity-50" data-testid="button-sync-now"><RefreshCw className="h-4 w-4" />Sync</button>
-          <a href={SHEET_URL} target="_blank" rel="noreferrer" className="flex h-10 items-center gap-1.5 rounded-md bg-secondary px-3 text-sm font-medium" data-testid="link-sheet"><ExternalLink className="h-4 w-4" />Sheet</a>
+          {sheetUrl && <a href={sheetUrl} target="_blank" rel="noreferrer" className="flex h-10 items-center gap-1.5 rounded-md bg-secondary px-3 text-sm font-medium" data-testid="link-sheet"><ExternalLink className="h-4 w-4" />Sheet</a>}
         </div>
         {msg && <p className={cn("mt-2 text-sm", msg.ok ? "text-primary" : "text-chart-2")} data-testid="text-sync-msg">{msg.text}</p>}
         <p className="mt-2 text-xs text-muted-foreground">Data is saved on this phone first. It syncs in the background when you're online.</p>
@@ -89,7 +89,7 @@ export default function SettingsPage() {
       <Section title="One-time sheet setup (desktop, 3 min)" testid="section-setup">
         <ol className="space-y-1.5 text-sm">
           {[
-            <>Open the <a href={SHEET_URL} target="_blank" rel="noreferrer" className="font-medium text-primary underline">Lift4 sheet</a> → Extensions → Apps Script</>,
+            <>Open your <b>Lift4 — Workout Log</b> Google Sheet → Extensions → Apps Script</>,
             <>Delete the sample code, paste the script below, press Save</>,
             <>Run <span className="font-mono">authorize</span> once → Allow</>,
             <>Deploy → New deployment → type Web app · Execute as Me · Access Anyone → Deploy</>,

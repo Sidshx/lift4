@@ -33,6 +33,7 @@ type State = {
   sessions: SessionRec[];
   bodyweights: BwRec[];
   syncUrl: string;
+  sheetUrl: string;
   lastSync: number | null;
   status: SyncStatus;
   lastError: string;
@@ -55,7 +56,7 @@ const storage = typeof window !== "undefined" ? getStorage() : null;
 export const persistent = !!storage;
 
 function load(): State {
-  const base: State = { sets: [], sessions: [], bodyweights: [], syncUrl: "", lastSync: null, status: "off", lastError: "" };
+  const base: State = { sets: [], sessions: [], bodyweights: [], syncUrl: "", sheetUrl: "", lastSync: null, status: "off", lastError: "" };
   try {
     const raw = storage?.getItem(KEY);
     if (raw) {
@@ -153,6 +154,10 @@ export function setSyncUrl(url: string) {
     sessions: state.sessions.map((s) => ({ ...s, dirty: true })),
     bodyweights: state.bodyweights.map((b) => ({ ...b, dirty: true })),
   });
+}
+
+export function setSheetUrl(sheetUrl: string) {
+  set({ sheetUrl }, true, false);
 }
 
 export function setStatus(status: SyncStatus, lastError = "") {
