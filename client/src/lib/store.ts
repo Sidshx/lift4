@@ -109,37 +109,44 @@ export const liveSessions = (s: State) => s.sessions.filter((x) => !x.deleted);
 export const liveBw = (s: State) => s.bodyweights.filter((x) => !x.deleted).sort((a, b) => a.date.localeCompare(b.date));
 
 /* ---------- Actions ---------- */
-export function logSet(r: Omit<SetRec, "id" | "ts" | "dirty" | "deleted">) {
-  const id = `${r.date}|${r.exerciseId}|${r.setIndex}`;
-  const rec: SetRec = { ...r, id, ts: Date.now(), dirty: true };
-  set({ sets: [...state.sets.filter((s) => s.id !== id), rec] });
+type SetIn = Omit<SetRec, "id" | "ts" | "dirty" | "deleted">;
+
+/** Session summary is derived from the sets actually logged for that date + day.
+ *  Upserted on every set change; removed when no sets remain. No "finish" step needed. */
+function sessionFor(sets: SetRec[], sessions: SessionRec[], date: string, day: number): SessionRec[] {
+  const plan = PLAN.find((d) => d.n === day);
+  if (!plan) return sessions;
+  const ids = new Set([...plan.main, plan.finisher].map((e) => e.id));
+  const mine = sets.filter((s) => !s.deleted && s.date === date && ids.has(s.exerciseId));
+  const id = `${date}|${day}`;
+  const prev = sessions.find((s) => s.id === id);
+  const rest = sessions.filter((s) => s.id !== id);
+  const now = Date.now();
+  if (!mine.length) {
+    // nothing logged: drop it (tombstone only if it was ever synced/created)
+    if (!prev || prev.deleted) return sessions;
+    return [...rest, { ...prev, deleted: true, dirty: true, finishedAt: Math.max(now, prev.finishedAt + 2) }];
+  }
+  const exercises = [...plan.main, plan.finisher].filter((e) => mine.some((s) => s.exerciseId === e.id)).length;
+  const volume = Math.round(mine.reduce((a, s) => a + s.weight * s.reps, 0));
+  // finishedAt doubles as the sync version, so it must always move forward
+  const finishedAt = Math.max(now, (prev?.finishedAt ?? 0) + 2);
+  return [...rest, { id, date, day, sets: mine.length, volume, exercises, finishedAt, dirty: true }];
 }
 
-export function logSets(rs: Omit<SetRec, "id" | "ts" | "dirty" | "deleted">[]) {
-  const now = Date.now();
-  const recs = rs.map((r) => ({ ...r, id: `${r.date}|${r.exerciseId}|${r.setIndex}`, ts: now, dirty: true }));
-  const ids = new Set(recs.map((r) => r.id));
-  set({ sets: [...state.sets.filter((s) => !ids.has(s.id)), ...recs] });
+export function logSet(r: SetIn) {
+  const id = `${r.date}|${r.exerciseId}|${r.setIndex}`;
+  const old = state.sets.find((s) => s.id === id);
+  const rec: SetRec = { ...r, id, ts: Math.max(Date.now(), (old?.ts ?? 0) + 2), dirty: true };
+  const sets = [...state.sets.filter((s) => s.id !== id), rec];
+  set({ sets, sessions: sessionFor(sets, state.sessions, r.date, r.day) });
 }
 
 export function unlogSet(id: string) {
-  set({ sets: state.sets.map((s) => (s.id === id ? { ...s, deleted: true, dirty: true, ts: Date.now() } : s)) });
-}
-
-export function finishSession(date: string, day: number) {
-  const plan = PLAN.find((d) => d.n === day)!;
-  const ids = [...plan.main, plan.finisher].map((e) => e.id);
-  const sets = state.sets.filter((s) => !s.deleted && s.date === date && ids.includes(s.exerciseId));
-  const exercises = new Set(sets.map((s) => s.exerciseId)).size;
-  const volume = Math.round(sets.reduce((a, s) => a + s.weight * s.reps, 0));
-  const id = `${date}|${day}`;
-  const rec: SessionRec = { id, date, day, sets: sets.length, volume, exercises, finishedAt: Date.now(), dirty: true };
-  set({ sessions: [...state.sessions.filter((s) => s.id !== id), rec] });
-  return rec;
-}
-
-export function reopenSession(id: string) {
-  set({ sessions: state.sessions.map((s) => (s.id === id ? { ...s, deleted: true, dirty: true, finishedAt: Date.now() } : s)) });
+  const old = state.sets.find((s) => s.id === id);
+  if (!old) return;
+  const sets = state.sets.map((s) => (s.id === id ? { ...s, deleted: true, dirty: true, ts: Math.max(Date.now(), s.ts + 2) } : s));
+  set({ sets, sessions: sessionFor(sets, state.sessions, old.date, old.day) });
 }
 
 export function logBodyweight(kg: number, date = todayISO()) {

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRoute } from "wouter";
-import { ArrowDown, ArrowUp, Check, ChevronDown, Clock, Flame, Target, TrendingUp, Wind, Trophy, RotateCcw } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, Clock, Flame, Target, TrendingUp, Wind, Trophy, CalendarDays } from "lucide-react";
 import { PLAN, imgSrc, todayISO, todaysDay, weekKey, type Exercise, type Block } from "@/data/plan";
-import { useStore, liveSets, liveSessions, logSet, logSets, unlogSet, finishSession, reopenSession, previousFor, type SetRec } from "@/lib/store";
+import { useStore, liveSets, logSet, unlogSet, previousFor, type SetRec } from "@/lib/store";
 import { useRestTimer } from "@/components/shell";
 import { cn } from "@/lib/utils";
 
@@ -58,8 +58,9 @@ function Stat({ label, value, icon, small }: { label: string; value: string; ico
 }
 
 /* ---------- Exercise card ---------- */
-type Registry = Map<string, () => Omit<SetRec, "id" | "ts" | "dirty" | "deleted">[]>;
-function ExerciseCard({ e, n, day, date, sets, tag, registry }: { e: Exercise; n: number; day: number; date: string; sets: SetRec[]; tag?: string; registry: Registry }) {
+// A set is logged the moment you show it was done: type its reps (auto-saves after a short pause
+// or when you leave the box) or tap the check. Pre-filled weights alone never count as done.
+function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; day: number; date: string; sets: SetRec[]; tag?: string }) {
   const timer = useRestTimer();
   const todays = sets.filter((l) => l.exerciseId === e.id && l.date === date);
   const prev = useMemo(() => previousFor(sets, e.id, date), [sets, e.id, date]);
@@ -73,36 +74,74 @@ function ExerciseCard({ e, n, day, date, sets, tag, registry }: { e: Exercise; n
       return { w: l ? String(l.weight) : defaultW, r: l ? String(l.reps) : "" };
     }),
   );
+  const valsRef = useRef(vals);
+  valsRef.current = vals;
+  const todaysRef = useRef(todays);
+  todaysRef.current = todays;
+  const timers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
+
   useEffect(() => {
-    setVals((v) => v.map((x, i) => {
-      const l = todays.find((t) => t.setIndex === i);
-      return l ? { w: String(l.weight), r: String(l.reps) } : x.w === "" && defaultW ? { ...x, w: defaultW } : x;
-    }));
-  }, [todays.length, defaultW]);
+    setVals((v) => v.map((x, i) => (x.w === "" && defaultW && !todays.some((t) => t.setIndex === i) ? { ...x, w: defaultW } : x)));
+  }, [defaultW]);
 
   const defReps = e.unit === "bw" && e.reps[1] >= 20 ? e.reps[0] : e.reps[1];
-  const rec = (i: number) => ({
-    date, day, exerciseId: e.id, setIndex: i,
-    weight: e.unit === "lb" ? Number(vals[i].w || 0) : 0,
-    reps: Number(vals[i].r || defReps),
-  });
 
-  const tick = (i: number) => {
-    const l = todays.find((t) => t.setIndex === i);
-    if (l) return unlogSet(l.id);
-    logSet(rec(i));
-    if (!vals[i].r) setVals((v) => v.map((x, j) => (j === i ? { ...x, r: String(defReps) } : x)));
+  const startRest = (i: number) => {
     if (i < e.sets - 1) timer.start(e.rest, `${e.name} · set ${i + 2}`);
     else timer.start(Math.max(e.rest, 90), "Next exercise");
   };
 
-  // Unticked sets with values are logged by the single "Finish workout" button.
-  registry.set(e.id, () =>
-    Array.from({ length: e.sets }, (_, i) => i)
-      .filter((i) => !todays.some((t) => t.setIndex === i))
-      .filter((i) => e.unit !== "lb" || Number(vals[i].w) > 0)
-      .map(rec),
-  );
+  /** Save row i from what's in the boxes: log, update, or remove. */
+  const commit = (i: number) => {
+    clearTimeout(timers.current[i]);
+    delete timers.current[i];
+    const v = valsRef.current[i];
+    const logged = todaysRef.current.find((t) => t.setIndex === i);
+    const reps = Number(v.r);
+    const weight = e.unit === "lb" ? Number(v.w || 0) : 0;
+    const ok = v.r.trim() !== "" && reps > 0 && (e.unit !== "lb" || weight > 0);
+    if (!ok) {
+      if (logged && v.r.trim() === "") unlogSet(logged.id);
+      return;
+    }
+    if (logged && logged.reps === reps && logged.weight === weight) return;
+    logSet({ date, day, exerciseId: e.id, setIndex: i, weight, reps });
+    if (!logged) startRest(i);
+  };
+  const commitSoon = (i: number) => {
+    clearTimeout(timers.current[i]);
+    timers.current[i] = setTimeout(() => commit(i), 1500);
+  };
+
+  // Flush anything typed but not yet saved if the phone locks or the app is switched away.
+  const commitRef = useRef(commit);
+  commitRef.current = commit;
+  useEffect(() => {
+    const flush = () => { if (document.visibilityState === "hidden") Object.keys(timers.current).forEach((k) => commitRef.current(Number(k))); };
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("pagehide", flush);
+    return () => { document.removeEventListener("visibilitychange", flush); window.removeEventListener("pagehide", flush); };
+  }, []);
+
+  const tick = (i: number) => {
+    const l = todays.find((t) => t.setIndex === i);
+    if (l) {
+      clearTimeout(timers.current[i]);
+      setVals((v) => v.map((x, j) => (j === i ? { ...x, r: "" } : x)));
+      return unlogSet(l.id);
+    }
+    const v = vals[i];
+    const r = v.r.trim() ? v.r : String(defReps);
+    if (e.unit === "lb" && !(Number(v.w) > 0)) {
+      document.querySelector<HTMLInputElement>(`[data-testid="input-weight-${e.id}-${i}"]`)?.focus();
+      return;
+    }
+    const next = vals.map((x, j) => (j === i ? { ...x, r } : x));
+    valsRef.current = next;
+    setVals(next);
+    commit(i);
+  };
 
   return (
     <article className={cn("rounded-xl border bg-card p-3 sm:p-4", complete && "border-primary/60")} data-testid={`card-exercise-${e.id}`}>
@@ -159,7 +198,7 @@ function ExerciseCard({ e, n, day, date, sets, tag, registry }: { e: Exercise; n
 
       <div className="mt-3 border-t pt-2">
         <div className="grid grid-cols-[2rem_1fr_1fr_3rem] gap-2 px-1 pb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-          <span className="text-center">Set</span><span>{e.unit === "lb" ? "Weight" : "Load"}</span><span>{e.unit === "sec" ? "Time" : "Reps"}</span><span className="text-center">Done</span>
+          <span className="text-center">Set</span><span>{e.unit === "lb" ? "Weight" : "Load"}</span><span>{e.unit === "sec" ? "Time" : "Reps"}</span><span className="text-center">Did it</span>
         </div>
         {vals.map((v, i) => {
           const done = todays.some((t) => t.setIndex === i);
@@ -169,17 +208,19 @@ function ExerciseCard({ e, n, day, date, sets, tag, registry }: { e: Exercise; n
               {e.unit === "lb" ? (
                 <label className="relative">
                   <span className="sr-only">Weight lb</span>
-                  <input inputMode="decimal" value={v.w} disabled={done} placeholder="0"
-                    onChange={(ev) => setVals((all) => all.map((x, j) => (j >= i && !todays.some((t) => t.setIndex === j) && (j === i || x.w === all[i].w) ? { ...x, w: ev.target.value } : x)))}
-                    className="h-11 w-full rounded-md border bg-background px-3 pr-8 font-mono text-base font-bold tabular-nums disabled:opacity-80" data-testid={`input-weight-${e.id}-${i}`} />
+                  <input inputMode="decimal" value={v.w} placeholder="0"
+                    onChange={(ev) => { const w = ev.target.value; setVals((all) => all.map((x, j) => (j >= i && !todays.some((t) => t.setIndex === j) && (j === i || x.w === all[i].w) ? { ...x, w } : x))); if (done) commitSoon(i); }}
+                    onBlur={() => done && commit(i)}
+                    className={cn("h-11 w-full rounded-md border bg-background px-3 pr-8 font-mono text-base font-bold tabular-nums", !done && !v.r && "text-muted-foreground")} data-testid={`input-weight-${e.id}-${i}`} />
                   <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">lb</span>
                 </label>
               ) : <span className="pl-2 text-sm text-muted-foreground">Bodyweight</span>}
               <label className="relative">
                 <span className="sr-only">{e.unit === "sec" ? "Seconds" : "Reps"}</span>
-                <input inputMode="numeric" value={v.r} disabled={done} placeholder={String(defReps)}
-                  onChange={(ev) => setVals((all) => all.map((x, j) => (j === i ? { ...x, r: ev.target.value } : x)))}
-                  className="h-11 w-full rounded-md border bg-background px-3 pr-10 font-mono text-base font-bold tabular-nums disabled:opacity-80" data-testid={`input-reps-${e.id}-${i}`} />
+                <input inputMode="numeric" value={v.r} placeholder={String(defReps)}
+                  onChange={(ev) => { const r = ev.target.value; setVals((all) => all.map((x, j) => (j === i ? { ...x, r } : x))); commitSoon(i); }}
+                  onBlur={() => commit(i)}
+                  className="h-11 w-full rounded-md border bg-background px-3 pr-10 font-mono text-base font-bold tabular-nums" data-testid={`input-reps-${e.id}-${i}`} />
                 <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{e.unit === "sec" ? "sec" : "reps"}</span>
               </label>
               <button onClick={() => tick(i)} aria-label={done ? `Undo set ${i + 1}` : `Complete set ${i + 1}`}
@@ -214,54 +255,44 @@ function BlockList({ title, minutes, items, testid }: { title: string; minutes: 
   );
 }
 
-/* ---------- Finish workout ---------- */
-function FinishCard({ day, date, sets, all, registry }: { day: number; date: string; sets: SetRec[]; all: Exercise[]; registry: Registry }) {
-  const timer = useRestTimer();
-  const sessions = useStore(liveSessions);
-  const session = sessions.find((s) => s.date === date && s.day === day);
+/* ---------- Auto-saved summary (no finish button) ---------- */
+function SummaryCard({ day, date, sets, all }: { day: number; date: string; sets: SetRec[]; all: Exercise[] }) {
   const ids = all.map((e) => e.id);
   const today = sets.filter((s) => s.date === date && ids.includes(s.exerciseId));
   const vol = Math.round(today.reduce((a, s) => a + s.weight * s.reps, 0));
   const exDone = all.filter((e) => today.filter((s) => s.exerciseId === e.id).length >= e.sets).length;
+  const totalSets = all.reduce((a, e) => a + e.sets, 0);
+  const allDone = today.length >= totalSets;
 
-  // last week's same-day volume
   const wk = weekKey(date);
   const prevDates = Array.from(new Set(sets.filter((s) => s.day === day && weekKey(s.date) < wk).map((s) => s.date))).sort();
   const lastDate = prevDates[prevDates.length - 1];
   const lastVol = lastDate ? Math.round(sets.filter((s) => s.date === lastDate && ids.includes(s.exerciseId)).reduce((a, s) => a + s.weight * s.reps, 0)) : 0;
-  const diff = lastVol ? Math.round(((vol - lastVol) / lastVol) * 100) : null;
+  const diff = lastVol && today.length ? Math.round(((vol - lastVol) / lastVol) * 100) : null;
 
-  if (session) {
-    const t = new Date(session.finishedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (!today.length) {
     return (
-      <section className="rounded-xl border border-primary bg-primary/10 p-4" data-testid="card-finished">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground"><Trophy className="h-5 w-5" /></span>
-          <div className="flex-1">
-            <div className="font-bold">Workout complete · {t}</div>
-            <div className="font-mono text-xs text-muted-foreground">{session.exercises}/{all.length} exercises · {session.sets} sets · {session.volume.toLocaleString()} lb</div>
-          </div>
-          <button onClick={() => reopenSession(session.id)} className="flex h-9 items-center gap-1 rounded-md bg-background px-2.5 text-xs font-medium hover-elevate" data-testid="button-reopen"><RotateCcw className="h-3.5 w-3.5" />Undo</button>
-        </div>
-        {diff !== null && (
-          <div className="mt-2 text-sm"><span className={cn("font-bold", diff >= 0 ? "text-primary" : "text-chart-2")}>{diff >= 0 ? "+" : ""}{diff}%</span> <span className="text-muted-foreground">total weight vs last week ({lastVol.toLocaleString()} lb)</span></div>
-        )}
+      <section className="rounded-xl border border-dashed bg-card p-4 text-center text-sm text-muted-foreground" data-testid="card-summary-empty">
+        Nothing logged {date === todayISO() ? "today" : "for this date"} yet. Sets save as you go: type the reps you did, or tap <Check className="inline h-3.5 w-3.5" strokeWidth={3} /> for the target reps.
       </section>
     );
   }
-
+  const lastTs = Math.max(...today.map((s) => s.ts));
+  const t = new Date(lastTs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return (
-    <section className="rounded-xl border bg-card p-4" data-testid="card-finish">
-      <div className="mb-3 grid grid-cols-3 gap-2 text-center">
-        <div><div className="font-mono text-lg font-bold">{exDone}/{all.length}</div><div className="text-[11px] text-muted-foreground">exercises</div></div>
-        <div><div className="font-mono text-lg font-bold">{today.length}</div><div className="text-[11px] text-muted-foreground">sets</div></div>
-        <div><div className="font-mono text-lg font-bold">{vol.toLocaleString()}</div><div className="text-[11px] text-muted-foreground">lb lifted</div></div>
+    <section className={cn("rounded-xl border p-4", allDone ? "border-primary bg-primary/10" : "bg-card")} data-testid="card-summary">
+      <div className="flex items-center gap-3">
+        <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-full", allDone ? "bg-primary text-primary-foreground" : "bg-secondary")}>
+          {allDone ? <Trophy className="h-5 w-5" /> : <Check className="h-5 w-5" strokeWidth={3} />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="font-bold">{allDone ? "Workout complete" : "Saved as you go"} · last set {t}</div>
+          <div className="font-mono text-xs text-muted-foreground">{exDone}/{all.length} exercises · {today.length}/{totalSets} sets · {vol.toLocaleString()} lb</div>
+        </div>
       </div>
-      <button onClick={() => { const pending = Array.from(registry.values()).flatMap((f) => f()); if (pending.length) logSets(pending); finishSession(date, day); timer.stop(); }}
-        className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-primary text-base font-bold text-primary-foreground hover-elevate disabled:opacity-40" data-testid="button-finish-workout">
-        <Check className="h-5 w-5" strokeWidth={3} /> Workout done
-      </button>
-      <p className="mt-2 text-center text-xs text-muted-foreground">Logs every set you filled in and marks today done</p>
+      {diff !== null && (
+        <div className="mt-2 text-sm"><span className={cn("font-bold", diff >= 0 ? "text-primary" : "text-chart-2")}>{diff >= 0 ? "+" : ""}{diff}%</span> <span className="text-muted-foreground">total weight vs last week{allDone ? "" : " so far"} ({lastVol.toLocaleString()} lb)</span></div>
+      )}
     </section>
   );
 }
@@ -295,15 +326,21 @@ export default function DayPage() {
   const t = todaysDay();
   const n = params ? Number(params.n) : t.n;
   const plan = PLAN.find((d) => d.n === n) ?? PLAN[0];
-  const date = todayISO();
+  const realToday = todayISO();
+  const [date, setDate] = useState(realToday);
   const sets = useStore(liveSets);
-  const registry = useRef<Registry>(new Map()).current;
+  const dateOptions = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const iso = todayISO(d);
+    const label = i === 0 ? "Today" : i === 1 ? "Yesterday" : d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+    return { iso, label };
+  });
 
   const all = [...plan.main, plan.finisher];
   const totalSets = all.reduce((a, e) => a + e.sets, 0);
   const doneSets = sets.filter((l) => l.date === date && all.some((e) => e.id === l.exerciseId)).length;
   const pct = Math.round((doneSets / totalSets) * 100);
-  const isToday = !t.rest && t.n === n;
+  const isToday = !t.rest && t.n === n && date === realToday;
 
   // last week's best for this day (motivation line)
   const wk = weekKey(date);
@@ -331,6 +368,14 @@ export default function DayPage() {
             </div>
             <h1 className="mt-1 text-xl font-bold leading-tight" data-testid="text-day-title">{plan.title}</h1>
             <div className="mt-2 flex flex-wrap gap-1.5">{plan.muscles.map((m) => <span key={m} className="rounded-md bg-secondary px-2 py-0.5 text-xs font-medium">{m}</span>)}</div>
+            <label className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <CalendarDays className="h-3.5 w-3.5" />
+              <span>Logging for</span>
+              <select value={date} onChange={(ev) => setDate(ev.target.value)}
+                className={cn("h-7 rounded-md border bg-background px-1.5 text-xs font-medium text-foreground", date !== realToday && "border-chart-4")} data-testid="select-log-date">
+                {dateOptions.map((o) => <option key={o.iso} value={o.iso}>{o.label}</option>)}
+              </select>
+            </label>
           </div>
           <div className="relative h-16 w-16 shrink-0" aria-label={`${pct}% of sets done`} data-testid="status-progress">
             <svg viewBox="0 0 36 36" className="h-16 w-16 -rotate-90">
@@ -358,11 +403,11 @@ export default function DayPage() {
 
       <TodayCard />
       <BlockList title="Warm-up" minutes="5 min" items={plan.warmup} testid="section-warmup" />
-      {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} registry={registry} />)}
+      {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} />)}
       <div className="flex items-center gap-2 pt-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><Flame className="h-3.5 w-3.5 text-chart-2" /> Finisher</div>
-      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} registry={registry} />
+      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} />
       <BlockList title="Stretch" minutes="2 min" items={plan.stretch} testid="section-stretch" />
-      <FinishCard day={plan.n} date={date} sets={sets} all={all} registry={registry} />
+      <SummaryCard day={plan.n} date={date} sets={sets} all={all} />
     </div>
   );
 }
