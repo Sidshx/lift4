@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
-import { Area, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Scale, Dumbbell, CalendarCheck, TrendingUp, ChevronRight } from "lucide-react";
-import { ALL_EXERCISES, MUSCLES, PLAN, PROFILE, todayISO, weekKey } from "@/data/plan";
+import { ALL_EXERCISES, PLAN, PROFILE, todayISO, weekKey } from "@/data/plan";
 import { useStore, liveSets, liveBw, logBodyweight } from "@/lib/store";
+import { WeekCoverage } from "@/components/week";
+import { coverage } from "@/lib/coach";
 import { cn } from "@/lib/utils";
 
 const axis = { stroke: "hsl(var(--muted-foreground))", fontSize: 11, tickLine: false, axisLine: false } as const;
@@ -51,6 +53,8 @@ export default function ProgressPage() {
     return Array.from(s.values());
   }, [logs]);
   const weekSessions = sessions.filter((s) => weekKey(s.date) === thisWeek);
+  const pauses = useStore((s) => s.pauses ?? {});
+  const cov = coverage(logs, thisWeek, pauses, today);
   const latestBw = bws.length ? bws[bws.length - 1] : null;
   const firstBw = bws.length ? bws[0] : null;
   const gain = latestBw && firstBw ? latestBw.kg - firstBw.kg : 0;
@@ -84,19 +88,6 @@ export default function ProgressPage() {
     return Array.from(byDate.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([d, v]) => ({ date: short(d), ...v }));
   }, [logs, selected]);
 
-  /* Weekly volume per muscle */
-  const volume = useMemo(() => {
-    const exMuscle = new Map(ALL_EXERCISES.map((e) => [e.id, e.muscle]));
-    const counts = Object.fromEntries(MUSCLES.map((m) => [m, 0])) as Record<string, number>;
-    logs.filter((l) => weekKey(l.date) === thisWeek).forEach((l) => {
-      const m = exMuscle.get(l.exerciseId);
-      if (m) counts[m] += 1;
-    });
-    const planned = Object.fromEntries(MUSCLES.map((m) => [m, 0])) as Record<string, number>;
-    ALL_EXERCISES.forEach((e) => (planned[e.muscle] += e.sets));
-    return MUSCLES.map((m) => ({ muscle: m.replace("Hamstrings/Glutes", "Hams/Glutes"), done: counts[m], plan: planned[m] }));
-  }, [logs, thisWeek]);
-
   /* Workouts per week (last 8) */
   const weekly = useMemo(() => {
     const out: { wk: string; n: number }[] = [];
@@ -120,9 +111,11 @@ export default function ProgressPage() {
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Kpi testid="kpi-bodyweight" icon={<Scale className="h-3.5 w-3.5" />} label="Bodyweight" value={latestBw ? `${latestBw.kg} kg` : "—"} sub={firstBw ? `${gain >= 0 ? "+" : ""}${gain.toFixed(1)} kg since ${short(firstBw.date)}` : "Log your weight below"} />
         <Kpi testid="kpi-rate" icon={<TrendingUp className="h-3.5 w-3.5" />} label="Gain / week" value={perWeek != null ? `${perWeek >= 0 ? "+" : ""}${perWeek.toFixed(2)}` : "—"} sub="Target +0.25–0.5 kg" />
-        <Kpi testid="kpi-week" icon={<CalendarCheck className="h-3.5 w-3.5" />} label="This week" value={`${weekSessions.length}/4`} sub="workouts" />
+        <Kpi testid="kpi-week" icon={<CalendarCheck className="h-3.5 w-3.5" />} label="This week" value={`${cov.doneCount}/${cov.active}`} sub={`muscle groups · ${new Set(weekSessions.map((s) => s.date)).size} gym days`} />
         <Kpi testid="kpi-total" icon={<Dumbbell className="h-3.5 w-3.5" />} label="All time" value={`${sessions.length}`} sub={`${logs.length} sets logged`} />
       </div>
+
+      <WeekCoverage />
 
       <Card testid="card-bodyweight" title="Bodyweight (kg)" right={<span className="text-xs text-muted-foreground">Band = target gain</span>}>
         <form className="mb-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (Number(kg) > 30) saveBw.mutate(); }}>
@@ -175,22 +168,6 @@ export default function ProgressPage() {
             </div>
           </>
         )}
-      </Card>
-
-      <Card testid="card-volume" title="Sets this week, by muscle" right={<span className="text-xs text-muted-foreground">Band = 10–14 sweet spot</span>}>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={volume} layout="vertical" margin={{ top: 0, right: 10, left: 10, bottom: 0 }} barGap={-12}>
-              <CartesianGrid stroke="hsl(var(--border))" horizontal={false} />
-              <ReferenceArea x1={10} x2={14} fill="hsl(var(--primary))" fillOpacity={0.08} />
-              <XAxis type="number" domain={[0, 18]} {...axis} />
-              <YAxis type="category" dataKey="muscle" width={78} {...axis} />
-              <Tooltip {...tip} cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }} />
-              <Bar dataKey="plan" name="Planned" fill="hsl(var(--muted))" barSize={12} radius={4} />
-              <Bar dataKey="done" name="Done" fill="hsl(var(--primary))" barSize={12} radius={4} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
       </Card>
 
       <Card testid="card-weekly" title="Workouts per week" right={<span className="text-xs text-muted-foreground">Goal 4</span>}>

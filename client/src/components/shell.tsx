@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { BarChart3, Moon, Sun, Pause, Play, X, Plus, Cloud, CloudOff, RefreshCw, Settings } from "lucide-react";
-import { useStore, pendingCount } from "@/lib/store";
-import { PLAN, todaysDay } from "@/data/plan";
+import { useStore, pendingCount, liveSets } from "@/lib/store";
+import { suggestDay } from "@/lib/coach";
+import { PLAN, todaysDay, todayISO } from "@/data/plan";
 import { cn } from "@/lib/utils";
 
 /* ---------- Logo ---------- */
@@ -96,7 +97,9 @@ function SyncBadge() {
 export function Shell({ children }: { children: ReactNode }) {
   const { dark, toggle } = useTheme();
   const [loc] = useLocation();
-  const today = todaysDay();
+  const sets = useStore(liveSets);
+  const pauses = useStore((s) => s.pauses ?? {});
+  const today = { n: suggestDay(sets, pauses, todayISO(), todaysDay().n), rest: false };
 
   const [timer, setTimer] = useState<{ total: number; left: number; label: string } | null>(null);
   const [paused, setPaused] = useState(false);

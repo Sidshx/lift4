@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRoute } from "wouter";
 import { ArrowDown, ArrowUp, Check, ChevronDown, Clock, Flame, Target, TrendingUp, Wind, Trophy, CalendarDays } from "lucide-react";
 import { PLAN, imgSrc, todayISO, todaysDay, weekKey, type Exercise, type Block } from "@/data/plan";
-import { useStore, liveSets, logSet, unlogSet, previousFor, type SetRec } from "@/lib/store";
+import { useStore, liveSets, logSet, unlogSet, type SetRec } from "@/lib/store";
+import { readiness, targetFor, suggestDay, MODE_TEXT, type Mode } from "@/lib/coach";
+import { WeekCoverage } from "@/components/week";
 import { useRestTimer } from "@/components/shell";
 import { cn } from "@/lib/utils";
 
@@ -12,17 +14,6 @@ function repLabel(e: Exercise) {
   if (e.unit === "sec") return `${r}s`;
   if (e.unit === "bw" && e.reps[1] >= 20) return "max";
   return e.perSide ? `${r}/side` : r;
-}
-
-type Prev = ReturnType<typeof previousFor>;
-function nextTarget(e: Exercise, prev: Prev) {
-  if (!prev) return null;
-  const { top, sets } = prev;
-  const allTop = sets.length >= e.sets && sets.every((s) => s.reps >= e.reps[1] && s.weight >= top.weight);
-  const lastTxt = e.unit === "lb" ? `${top.weight} lb × ${top.reps}` : e.unit === "sec" ? `${top.reps}s` : `${top.reps} reps`;
-  if (e.unit === "lb" && allTop) return { last: lastTxt, next: `Go ${top.weight + 5} lb`, weight: top.weight + 5, up: true };
-  if (e.unit === "sec") return { last: lastTxt, next: `Hold ${top.reps + 5}s`, weight: 0, up: false };
-  return { last: lastTxt, next: `Try ${top.reps + 1} reps`, weight: top.weight, up: false };
 }
 
 /* ---------- Image (auto start/end flip, tap to pause) ---------- */
@@ -60,13 +51,14 @@ function Stat({ label, value, icon, small }: { label: string; value: string; ico
 /* ---------- Exercise card ---------- */
 // A set is logged the moment you show it was done: type its reps (auto-saves after a short pause
 // or when you leave the box) or tap the check. Pre-filled weights alone never count as done.
-function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; day: number; date: string; sets: SetRec[]; tag?: string }) {
+function ExerciseCard({ e, n, day, date, sets, tag, mode }: { e: Exercise; n: number; day: number; date: string; sets: SetRec[]; tag?: string; mode: Mode }) {
   const timer = useRestTimer();
   const todays = sets.filter((l) => l.exerciseId === e.id && l.date === date);
-  const prev = useMemo(() => previousFor(sets, e.id, date), [sets, e.id, date]);
-  const target = nextTarget(e, prev);
-  const defaultW = target?.weight ? String(target.weight) : "";
-  const complete = todays.length >= e.sets;
+  // Target is fixed by sets before this date, so logging today doesn't move it.
+  const earlier = useMemo(() => sets.filter((s) => s.exerciseId === e.id && s.date < date), [sets, e.id, date]);
+  const target = useMemo(() => targetFor(e, earlier, date, mode), [e, earlier, date, mode]);
+  const defaultW = target.weight ? String(target.weight) : "";
+  const complete = todays.length >= target.sets;
 
   const [vals, setVals] = useState(() =>
     Array.from({ length: e.sets }, (_, i) => {
@@ -81,11 +73,16 @@ function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; 
   const timers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   useEffect(() => () => Object.values(timers.current).forEach(clearTimeout), []);
 
+  // If the target weight changes (e.g. Fitbit data arrives), refresh rows still showing the old target.
+  const prevDefault = useRef(defaultW);
   useEffect(() => {
-    setVals((v) => v.map((x, i) => (x.w === "" && defaultW && !todays.some((t) => t.setIndex === i) ? { ...x, w: defaultW } : x)));
+    const old = prevDefault.current;
+    prevDefault.current = defaultW;
+    setVals((v) => v.map((x, i) => ((x.w === "" || x.w === old) && defaultW && !todays.some((t) => t.setIndex === i) ? { ...x, w: defaultW } : x)));
   }, [defaultW]);
 
-  const defReps = e.unit === "bw" && e.reps[1] >= 20 ? e.reps[0] : e.reps[1];
+  // One tap on the check logs exactly what the row shows: target weight × target reps.
+  const defReps = target.reps;
 
   const startRest = (i: number) => {
     if (i < e.sets - 1) timer.start(e.rest, `${e.name} · set ${i + 2}`);
@@ -153,14 +150,19 @@ function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; 
           <h3 className="text-base font-bold leading-tight">{e.name}</h3>
           <div className="mt-1 flex items-center gap-1.5 text-sm text-primary"><Target className="h-3.5 w-3.5 shrink-0" /><span className="font-medium">Feel it: {e.feel}</span></div>
         </div>
-        {prev?.lastWeek && e.unit === "lb" ? (
-          <span className="shrink-0 rounded-md border px-1.5 py-0.5 text-right leading-tight" title="Your top weight last week" data-testid={`chip-lastweek-${e.id}`}>
-            <span className="block text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Last wk</span>
-            <span className="font-mono text-xs font-bold">{prev.top.weight} lb</span>
-          </span>
-        ) : (
-          <span className="font-mono text-xs font-bold text-muted-foreground">{todays.length}/{e.sets}</span>
-        )}
+        <span className="font-mono text-xs font-bold text-muted-foreground" data-testid={`text-count-${e.id}`}>{todays.length}/{target.sets}</span>
+      </div>
+
+      <div className={cn("mb-3 rounded-lg border px-3 py-2", target.up ? "border-primary bg-primary/10" : "bg-secondary/60")} data-testid={`box-target-${e.id}`}>
+        <div className="flex items-center gap-2">
+          {target.first ? <Flame className="h-4 w-4 shrink-0 text-chart-2" /> : <TrendingUp className={cn("h-4 w-4 shrink-0", target.up ? "text-primary" : "text-muted-foreground")} />}
+          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Today</span>
+          <span className="font-mono text-base font-bold" data-testid={`text-target-${e.id}`}>{target.headline}</span>
+          <span className="font-mono text-xs text-muted-foreground">× {target.sets} sets</span>
+          {target.up && <span className="ml-auto rounded bg-primary px-1.5 py-0.5 text-[10px] font-bold uppercase text-primary-foreground">Up</span>}
+        </div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{target.reason}</div>
+        {target.last && <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">Last time: {target.last}</div>}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
@@ -184,15 +186,6 @@ function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; 
           <ul className="space-y-1 text-sm">
             {e.cues.map((c) => <li key={c} className="flex gap-2"><span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /><span>{c}</span></li>)}
           </ul>
-          {target ? (
-            <div className={cn("flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm", target.up && "border-primary bg-primary/10")} data-testid={`text-hint-${e.id}`}>
-              <TrendingUp className="h-4 w-4 shrink-0 text-primary" />
-              <span className="text-muted-foreground">{prev?.lastWeek ? "Last wk" : "Last"}: <span className="font-mono font-bold text-foreground">{target.last}</span></span>
-              <span className="ml-auto font-bold text-primary">{target.next}</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground"><Flame className="h-4 w-4 shrink-0" /> First time: last 2 reps should feel hard</div>
-          )}
         </div>
       </div>
 
@@ -202,9 +195,10 @@ function ExerciseCard({ e, n, day, date, sets, tag }: { e: Exercise; n: number; 
         </div>
         {vals.map((v, i) => {
           const done = todays.some((t) => t.setIndex === i);
+          const optional = i >= target.sets && !done;
           return (
-            <div key={i} className={cn("grid grid-cols-[2rem_1fr_1fr_3rem] items-center gap-2 rounded-lg px-1 py-1", done && "bg-primary/10")} data-testid={`row-set-${e.id}-${i}`}>
-              <span className="text-center font-mono text-sm font-bold text-muted-foreground">{i + 1}</span>
+            <div key={i} className={cn("grid grid-cols-[2rem_1fr_1fr_3rem] items-center gap-2 rounded-lg px-1 py-1", done && "bg-primary/10", optional && "opacity-45")} data-testid={`row-set-${e.id}-${i}`}>
+              <span className="text-center font-mono text-sm font-bold text-muted-foreground" title={optional ? "Optional today" : undefined}>{optional ? "–" : i + 1}</span>
               {e.unit === "lb" ? (
                 <label className="relative">
                   <span className="sr-only">Weight lb</span>
@@ -273,7 +267,7 @@ function SummaryCard({ day, date, sets, all }: { day: number; date: string; sets
   if (!today.length) {
     return (
       <section className="rounded-xl border border-dashed bg-card p-4 text-center text-sm text-muted-foreground" data-testid="card-summary-empty">
-        Nothing logged {date === todayISO() ? "today" : "for this date"} yet. Sets save as you go: type the reps you did, or tap <Check className="inline h-3.5 w-3.5" strokeWidth={3} /> for the target reps.
+        Nothing logged {date === todayISO() ? "today" : "for this date"} yet. Hit the target? Tap <Check className="inline h-3.5 w-3.5" strokeWidth={3} /> once per set. Did something different? Type the weight or reps and it saves.
       </section>
     );
   }
@@ -297,24 +291,27 @@ function SummaryCard({ day, date, sets, all }: { day: number; date: string; sets
   );
 }
 
-/* ---------- Fitbit readiness ---------- */
-function TodayCard() {
+/* ---------- Fitbit readiness → what to do today ---------- */
+function TodayCard({ logDate }: { logDate: string }) {
   const fitbit = useStore((s) => s.fitbit);
-  const last = fitbit[fitbit.length - 1];
-  if (!last?.readiness) return null;
-  const fresh = last.date === todayISO();
-  const age = Math.round((new Date(todayISO()).getTime() - new Date(last.date).getTime()) / 86400000);
-  if (age > 3) return null;
-  const tone = !fresh ? "bg-muted-foreground" : last.readiness === "Green" ? "bg-primary" : last.readiness === "Yellow" ? "bg-chart-4" : "bg-chart-2";
-  const [head, why] = last.tip.split(" (");
+  const r = readiness(fitbit);
+  const pastLog = logDate !== todayISO();
+  const mode: Mode = pastLog ? "normal" : r.mode;
+  const d = r.data;
+  const age = r.date ? Math.round((new Date(todayISO()).getTime() - new Date(r.date).getTime()) / 86400000) : null;
+  const tone = mode === "push" ? "bg-primary" : mode === "hold" ? "bg-chart-4" : mode === "light" ? "bg-chart-2" : "bg-muted-foreground";
+  const text = MODE_TEXT[mode];
   return (
-    <section className={cn("flex items-center gap-3 rounded-xl border bg-card px-4 py-3", !fresh && "opacity-60")} data-testid="card-today-fitbit">
-      <span className={cn("h-3 w-3 shrink-0 rounded-full", tone)} aria-label={`Readiness ${last.readiness}`} />
+    <section className={cn("flex items-start gap-3 rounded-xl border bg-card px-4 py-3", mode === "light" && "border-chart-2/60", mode === "push" && "border-primary/50")} data-testid="card-today-fitbit">
+      <span className={cn("mt-1 h-3 w-3 shrink-0 rounded-full", tone)} aria-hidden />
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-bold">{fresh ? head : `${age === 1 ? "Yesterday" : `${age} days ago`} · waiting for today's sync`}</div>
-        <div className="truncate font-mono text-xs text-muted-foreground">
-          {last.sleep}h sleep · HRV {last.hrv} · RHR {last.rhr}{why ? ` · ${why.replace(")", "")}` : ""}
-        </div>
+        <div className="text-sm font-bold" data-testid="text-readiness">{pastLog ? "Logging a past day · normal targets" : text.title}</div>
+        <div className="text-sm text-muted-foreground">{pastLog ? "Fitbit only adjusts today's targets." : text.rule}{!pastLog && r.fresh ? " Targets below are adjusted." : ""}</div>
+        {d && (
+          <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">
+            {r.fresh ? "" : age === 1 ? "Yesterday: " : age != null ? `${age}d ago: ` : ""}{d.sleep}h sleep · HRV {d.hrv} · RHR {d.rhr}{r.why ? ` · ${r.why}` : ""}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -324,11 +321,15 @@ function TodayCard() {
 export default function DayPage() {
   const [, params] = useRoute("/day/:n");
   const t = todaysDay();
-  const n = params ? Number(params.n) : t.n;
+  const sets = useStore(liveSets);
+  const pauses = useStore((s) => s.pauses ?? {});
+  const fitbit = useStore((s) => s.fitbit);
+  const suggested = useMemo(() => suggestDay(sets, pauses, todayISO(), t.n), [sets, pauses]);
+  const n = params ? Number(params.n) : suggested;
   const plan = PLAN.find((d) => d.n === n) ?? PLAN[0];
   const realToday = todayISO();
   const [date, setDate] = useState(realToday);
-  const sets = useStore(liveSets);
+  const mode: Mode = date === realToday ? readiness(fitbit).mode : "normal";
   const dateOptions = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(); d.setDate(d.getDate() - i);
     const iso = todayISO(d);
@@ -340,14 +341,7 @@ export default function DayPage() {
   const totalSets = all.reduce((a, e) => a + e.sets, 0);
   const doneSets = sets.filter((l) => l.date === date && all.some((e) => e.id === l.exerciseId)).length;
   const pct = Math.round((doneSets / totalSets) * 100);
-  const isToday = !t.rest && t.n === n && date === realToday;
-
-  // last week's best for this day (motivation line)
-  const wk = weekKey(date);
-  const lastWeekTops = plan.main.filter((e) => e.unit === "lb").map((e) => {
-    const prev = previousFor(sets, e.id, date);
-    return prev?.lastWeek ? { name: e.name.split(" ").slice(-2).join(" "), w: prev.top.weight } : null;
-  }).filter(Boolean) as { name: string; w: number }[];
+  const isToday = suggested === n && date === realToday;
 
   const timeline = [
     { label: "Warm-up", min: 5, cls: "bg-muted-foreground/40" },
@@ -362,9 +356,8 @@ export default function DayPage() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              <span>Day {plan.n} · {plan.weekday}</span>
-              {isToday && <span className="rounded bg-primary px-1.5 py-0.5 text-primary-foreground">Today</span>}
-              {t.rest && t.n === n && <span className="rounded bg-secondary px-1.5 py-0.5">Rest day · next up</span>}
+              <span>Day {plan.n} · usually {plan.weekday}</span>
+              {isToday && <span className="rounded bg-primary px-1.5 py-0.5 text-primary-foreground">Suggested</span>}
             </div>
             <h1 className="mt-1 text-xl font-bold leading-tight" data-testid="text-day-title">{plan.title}</h1>
             <div className="mt-2 flex flex-wrap gap-1.5">{plan.muscles.map((m) => <span key={m} className="rounded-md bg-secondary px-2 py-0.5 text-xs font-medium">{m}</span>)}</div>
@@ -392,20 +385,14 @@ export default function DayPage() {
           <div className="flex h-2 overflow-hidden rounded-full">{timeline.map((s) => <div key={s.label} className={s.cls} style={{ width: `${(s.min / 60) * 100}%` }} />)}</div>
           <div className="mt-1.5 flex justify-between text-[11px] text-muted-foreground">{timeline.map((s) => <span key={s.label}><span className="font-mono font-bold text-foreground">{s.min}′</span> {s.label}</span>)}</div>
         </div>
-        {lastWeekTops.length > 0 && (
-          <div className="mt-3 flex items-center gap-2 overflow-x-auto rounded-lg bg-secondary px-2.5 py-2 text-xs" data-testid="strip-lastweek">
-            <TrendingUp className="h-3.5 w-3.5 shrink-0 text-primary" />
-            <span className="shrink-0 font-bold">Last wk — beat it:</span>
-            {lastWeekTops.map((x) => <span key={x.name} className="shrink-0 whitespace-nowrap text-muted-foreground">{x.name} <span className="font-mono font-bold text-foreground">{x.w}</span></span>)}
-          </div>
-        )}
       </section>
 
-      <TodayCard />
+      <TodayCard logDate={date} />
+      <WeekCoverage collapsible />
       <BlockList title="Warm-up" minutes="5 min" items={plan.warmup} testid="section-warmup" />
-      {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} />)}
+      {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} mode={mode} />)}
       <div className="flex items-center gap-2 pt-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><Flame className="h-3.5 w-3.5 text-chart-2" /> Finisher</div>
-      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} />
+      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} mode={mode} />
       <BlockList title="Stretch" minutes="2 min" items={plan.stretch} testid="section-stretch" />
       <SummaryCard day={plan.n} date={date} sets={sets} all={all} />
     </div>

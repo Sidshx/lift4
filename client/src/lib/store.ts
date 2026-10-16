@@ -36,6 +36,7 @@ type State = {
   syncUrl: string;
   sheetUrl: string;
   fitbit: FitbitDay[];
+  pauses: Record<string, string>; // muscle group → paused through this date
   lastSync: number | null;
   status: SyncStatus;
   lastError: string;
@@ -58,7 +59,7 @@ const storage = typeof window !== "undefined" ? getStorage() : null;
 export const persistent = !!storage;
 
 function load(): State {
-  const base: State = { sets: [], sessions: [], bodyweights: [], syncUrl: "", sheetUrl: "", fitbit: [], lastSync: null, status: "off", lastError: "" };
+  const base: State = { sets: [], sessions: [], bodyweights: [], syncUrl: "", sheetUrl: "", fitbit: [], pauses: {}, lastSync: null, status: "off", lastError: "" };
   try {
     const raw = storage?.getItem(KEY);
     if (raw) {
@@ -169,6 +170,13 @@ export function setFitbit(fitbit: FitbitDay[]) {
   set({ fitbit }, true, false);
 }
 
+/** Pause a muscle group through `until` (inclusive), or resume it with null. */
+export function setPause(group: string, until: string | null) {
+  const pauses = { ...state.pauses };
+  if (until) pauses[group] = until; else delete pauses[group];
+  set({ pauses }, true, false);
+}
+
 export function setSheetUrl(sheetUrl: string) {
   set({ sheetUrl }, true, false);
 }
@@ -212,6 +220,7 @@ export function importJSON(text: string) {
     sets: (p.sets ?? []).map((x: SetRec) => ({ ...x, dirty: true })),
     sessions: (p.sessions ?? []).map((x: SessionRec) => ({ ...x, dirty: true })),
     bodyweights: (p.bodyweights ?? []).map((x: BwRec) => ({ ...x, dirty: true })),
+    pauses: p.pauses ?? state.pauses,
   });
 }
 
