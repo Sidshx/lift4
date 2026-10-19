@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { Area, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Scale, Dumbbell, CalendarCheck, TrendingUp, ChevronRight } from "lucide-react";
-import { ALL_EXERCISES, PLAN, PROFILE, todayISO, weekKey } from "@/data/plan";
+import { ALL_EXERCISES, KNOWN_EXERCISES, RETIRED, PLAN, PROFILE, todayISO, weekKey } from "@/data/plan";
 import { useStore, liveSets, liveBw, logBodyweight } from "@/lib/store";
 import { WeekCoverage } from "@/components/week";
 import { coverage } from "@/lib/coach";
@@ -74,19 +74,21 @@ export default function ProgressPage() {
   }, [bws]);
 
   /* Strength per exercise */
-  const liftable = ALL_EXERCISES.filter((e) => e.unit === "lb");
+  const liftable = KNOWN_EXERCISES.filter((e) => e.unit === "lb");
   const logged = liftable.filter((e) => logs.some((l) => l.exerciseId === e.id));
+  const loggedRetired = RETIRED.filter((e) => logs.some((l) => l.exerciseId === e.id));
   const [exId, setExId] = useState<string>("");
-  const selected = exId || logged[0]?.id || liftable[0].id;
+  const selected = exId || logged[0]?.id || ALL_EXERCISES[0].id;
+  const selEx = KNOWN_EXERCISES.find((e) => e.id === selected);
   const strength = useMemo(() => {
     const byDate = new Map<string, { top: number; e1rm: number }>();
-    logs.filter((l) => l.exerciseId === selected).forEach((l) => {
-      const e1 = l.weight * (1 + l.reps / 30);
+    logs.filter((l) => l.exerciseId === selected || (selEx?.from && l.exerciseId === selEx.from)).forEach((l) => {
+      const e1 = selEx?.timed ? l.weight : l.weight * (1 + l.reps / 30);
       const cur = byDate.get(l.date) ?? { top: 0, e1rm: 0 };
       byDate.set(l.date, { top: Math.max(cur.top, l.weight), e1rm: Math.max(cur.e1rm, Math.round(e1)) });
     });
     return Array.from(byDate.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([d, v]) => ({ date: short(d), ...v }));
-  }, [logs, selected]);
+  }, [logs, selected, selEx]);
 
   /* Workouts per week (last 8) */
   const weekly = useMemo(() => {
@@ -146,6 +148,11 @@ export default function ProgressPage() {
               {[...d.main, d.finisher].filter((e) => e.unit === "lb").map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
             </optgroup>
           ))}
+          {loggedRetired.length > 0 && (
+            <optgroup label="Earlier plan">
+              {loggedRetired.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </optgroup>
+          )}
         </select>
       }>
         {strength.length === 0 ? <Empty text="Log sets for this exercise to see the line" /> : (
@@ -194,7 +201,7 @@ export default function ProgressPage() {
                 <span className={cn("flex h-8 w-8 items-center justify-center rounded-lg font-mono text-sm font-bold", done ? "bg-primary text-primary-foreground" : "bg-secondary")}>{d.n}</span>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-bold">{d.title}</div>
-                  <div className="text-xs text-muted-foreground">{d.weekday} · 7 exercises · {sets} sets</div>
+                  <div className="text-xs text-muted-foreground">{d.weekday} · {d.main.length + 1} exercises · {sets} sets</div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground" />
               </Link>

@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 /* ---------- helpers ---------- */
 function repLabel(e: Exercise) {
   const r = e.reps[0] === e.reps[1] ? `${e.reps[0]}` : `${e.reps[0]}–${e.reps[1]}`;
-  if (e.unit === "sec") return `${r}s`;
+  if (e.unit === "sec" || e.timed) return `${r}s`;
   if (e.unit === "bw" && e.reps[1] >= 20) return "max";
   return e.perSide ? `${r}/side` : r;
 }
@@ -55,7 +55,7 @@ function ExerciseCard({ e, n, day, date, sets, tag, mode }: { e: Exercise; n: nu
   const timer = useRestTimer();
   const todays = sets.filter((l) => l.exerciseId === e.id && l.date === date);
   // Target is fixed by sets before this date, so logging today doesn't move it.
-  const earlier = useMemo(() => sets.filter((s) => s.exerciseId === e.id && s.date < date), [sets, e.id, date]);
+  const earlier = useMemo(() => sets.filter((s) => (s.exerciseId === e.id || (e.from && s.exerciseId === e.from)) && s.date < date), [sets, e.id, e.from, date]);
   const target = useMemo(() => targetFor(e, earlier, date, mode), [e, earlier, date, mode]);
   const defaultW = target.weight ? String(target.weight) : "";
   const complete = todays.length >= target.sets;
@@ -191,7 +191,7 @@ function ExerciseCard({ e, n, day, date, sets, tag, mode }: { e: Exercise; n: nu
 
       <div className="mt-3 border-t pt-2">
         <div className="grid grid-cols-[2rem_1fr_1fr_3rem] gap-2 px-1 pb-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-          <span className="text-center">Set</span><span>{e.unit === "lb" ? "Weight" : "Load"}</span><span>{e.unit === "sec" ? "Time" : "Reps"}</span><span className="text-center">Did it</span>
+          <span className="text-center">Set</span><span>{e.unit === "lb" ? "Weight" : "Load"}</span><span>{e.unit === "sec" || e.timed ? "Time" : "Reps"}</span><span className="text-center">Did it</span>
         </div>
         {vals.map((v, i) => {
           const done = todays.some((t) => t.setIndex === i);
@@ -210,12 +210,12 @@ function ExerciseCard({ e, n, day, date, sets, tag, mode }: { e: Exercise; n: nu
                 </label>
               ) : <span className="pl-2 text-sm text-muted-foreground">Bodyweight</span>}
               <label className="relative">
-                <span className="sr-only">{e.unit === "sec" ? "Seconds" : "Reps"}</span>
+                <span className="sr-only">{e.unit === "sec" || e.timed ? "Seconds" : "Reps"}</span>
                 <input inputMode="numeric" value={v.r} placeholder={String(defReps)}
                   onChange={(ev) => { const r = ev.target.value; setVals((all) => all.map((x, j) => (j === i ? { ...x, r } : x))); commitSoon(i); }}
                   onBlur={() => commit(i)}
                   className="h-11 w-full rounded-md border bg-background px-3 pr-10 font-mono text-base font-bold tabular-nums" data-testid={`input-reps-${e.id}-${i}`} />
-                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{e.unit === "sec" ? "sec" : "reps"}</span>
+                <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">{e.unit === "sec" || e.timed ? "sec" : "reps"}</span>
               </label>
               <button onClick={() => tick(i)} aria-label={done ? `Undo set ${i + 1}` : `Complete set ${i + 1}`}
                 className={cn("flex h-11 w-12 items-center justify-center rounded-md border transition-colors", done ? "border-primary bg-primary text-primary-foreground" : "bg-secondary hover-elevate")}
@@ -253,7 +253,7 @@ function BlockList({ title, minutes, items, testid }: { title: string; minutes: 
 function SummaryCard({ day, date, sets, all }: { day: number; date: string; sets: SetRec[]; all: Exercise[] }) {
   const ids = all.map((e) => e.id);
   const today = sets.filter((s) => s.date === date && ids.includes(s.exerciseId));
-  const vol = Math.round(today.reduce((a, s) => a + s.weight * s.reps, 0));
+  const vol = Math.round(today.reduce((a, s) => a + (all.find((e) => e.id === s.exerciseId)?.timed ? 0 : s.weight * s.reps), 0));
   const exDone = all.filter((e) => today.filter((s) => s.exerciseId === e.id).length >= e.sets).length;
   const totalSets = all.reduce((a, e) => a + e.sets, 0);
   const allDone = today.length >= totalSets;
@@ -392,7 +392,7 @@ export default function DayPage() {
       <BlockList title="Warm-up" minutes="5 min" items={plan.warmup} testid="section-warmup" />
       {plan.main.map((e, i) => <ExerciseCard key={`${e.id}-${date}`} e={e} n={i + 1} day={plan.n} date={date} sets={sets} mode={mode} />)}
       <div className="flex items-center gap-2 pt-2 text-xs font-bold uppercase tracking-wider text-muted-foreground"><Flame className="h-3.5 w-3.5 text-chart-2" /> Finisher</div>
-      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={7} tag="F" day={plan.n} date={date} sets={sets} mode={mode} />
+      <ExerciseCard key={`${plan.finisher.id}-${date}`} e={plan.finisher} n={plan.main.length + 1} tag="F" day={plan.n} date={date} sets={sets} mode={mode} />
       <BlockList title="Stretch" minutes="2 min" items={plan.stretch} testid="section-stretch" />
       <SummaryCard day={plan.n} date={date} sets={sets} all={all} />
     </div>

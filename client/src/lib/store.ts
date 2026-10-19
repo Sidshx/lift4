@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
-import { ALL_EXERCISES, PLAN, todayISO, weekKey } from "@/data/plan";
+import { KNOWN_EXERCISES, PLAN, todayISO, weekKey } from "@/data/plan";
 
 /* ---------- Types ---------- */
 export type SetRec = {
@@ -129,7 +129,7 @@ function sessionFor(sets: SetRec[], sessions: SessionRec[], date: string, day: n
     return [...rest, { ...prev, deleted: true, dirty: true, finishedAt: Math.max(now, prev.finishedAt + 2) }];
   }
   const exercises = [...plan.main, plan.finisher].filter((e) => mine.some((s) => s.exerciseId === e.id)).length;
-  const volume = Math.round(mine.reduce((a, s) => a + s.weight * s.reps, 0));
+  const volume = Math.round(mine.reduce((a, s) => a + ([...plan.main, plan.finisher].find((e) => e.id === s.exerciseId)?.timed ? 0 : s.weight * s.reps), 0));
   // finishedAt doubles as the sync version, so it must always move forward
   const finishedAt = Math.max(now, (prev?.finishedAt ?? 0) + 2);
   return [...rest, { id, date, day, sets: mine.length, volume, exercises, finishedAt, dirty: true }];
@@ -225,7 +225,7 @@ export function importJSON(text: string) {
 }
 
 /* ---------- Derived helpers ---------- */
-const EX = new Map(ALL_EXERCISES.map((e) => [e.id, e]));
+const EX = new Map(KNOWN_EXERCISES.map((e) => [e.id, e]));
 export const exInfo = (id: string) => EX.get(id);
 
 /** Most recent previous-week session for an exercise (falls back to any earlier day). */

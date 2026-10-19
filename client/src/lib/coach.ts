@@ -1,4 +1,4 @@
-import { PLAN, ALL_EXERCISES, todayISO, weekKey, type Exercise, type Muscle } from "@/data/plan";
+import { PLAN, ALL_EXERCISES, KNOWN_EXERCISES, todayISO, weekKey, type Exercise, type Muscle } from "@/data/plan";
 import type { FitbitDay, SetRec } from "@/lib/store";
 
 /* ================= Fitbit readiness → decision ================= */
@@ -28,9 +28,10 @@ export function nextWeight(e: Exercise, w: number) {
   return w < 20 ? w + 2.5 : w + 5; // cable stack / machine
 }
 
-/** All sets from the most recent earlier date this exercise was done (any weekday). */
-export function lastSession(sets: SetRec[], exId: string, before: string) {
-  const earlier = sets.filter((s) => s.exerciseId === exId && s.date < before);
+/** All sets from the most recent earlier date this exercise (or its `from` predecessor) was done. */
+export function lastSession(sets: SetRec[], exId: string, before: string, fromId?: string) {
+  const own = sets.filter((s) => s.exerciseId === exId && s.date < before);
+  const earlier = own.length ? own : fromId ? sets.filter((s) => s.exerciseId === fromId && s.date < before) : [];
   if (!earlier.length) return null;
   const date = earlier.reduce((a, s) => (s.date > a ? s.date : a), earlier[0].date);
   return { date, sets: earlier.filter((s) => s.date === date).sort((a, b) => a.setIndex - b.setIndex) };
@@ -51,14 +52,15 @@ const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
 export function targetFor(e: Exercise, sets: SetRec[], date: string, mode: Mode): Target {
   const [lo, hi] = e.reps;
-  const prev = lastSession(sets, e.id, date);
+  const prev = lastSession(sets, e.id, date, e.from);
   const nSets = mode === "light" ? Math.max(2, e.sets - 1) : e.sets;
   const lightNote = mode === "light" ? " Red day: 1 fewer set." : "";
+  const sfx = e.timed ? "s" : "";
   if (!prev) {
     const reps = e.unit === "bw" && hi >= 20 ? lo : hi;
-    return { weight: 0, reps, sets: nSets, headline: e.unit === "lb" ? `Start ${e.start}` : `${reps} reps`, reason: "First time: pick a weight where the last 2 reps feel hard." + lightNote, up: false, first: true };
+    return { weight: 0, reps, sets: nSets, headline: e.unit === "lb" ? `Start ${e.start}` : `${reps} reps`, reason: (e.timed ? `First time: pick a weight you can carry cleanly for ${lo}–${hi}s.` : "First time: pick a weight where the last 2 reps feel hard.") + lightNote, up: false, first: true };
   }
-  const last = prev.sets.map((s) => (e.unit === "lb" ? `${fmt(s.weight)}×${s.reps}` : `${s.reps}`)).join(" · ");
+  const last = prev.sets.map((s) => (e.unit === "lb" ? `${fmt(s.weight)}×${s.reps}${sfx}` : `${s.reps}`)).join(" · ");
 
   if (e.unit !== "lb") {
     const best = Math.max(...prev.sets.map((s) => s.reps));
@@ -70,22 +72,22 @@ export function targetFor(e: Exercise, sets: SetRec[], date: string, mode: Mode)
   const W = Math.max(...prev.sets.map((s) => s.weight));
   const atW = prev.sets.filter((s) => s.weight === W);
   const bestAtW = Math.max(...atW.map((s) => s.reps));
-  // Earned a jump: every planned set reached the top of the rep range (warm-up ramps are fine).
+  // Earned a jump: every planned set reached the top of the rep/time range (warm-up ramps are fine).
   const earned = prev.sets.length >= e.sets && prev.sets.every((s) => s.reps >= hi);
 
   if (earned && (mode === "push" || mode === "normal")) {
     const w = nextWeight(e, W);
-    return { weight: w, reps: lo, sets: nSets, headline: `${fmt(w)} lb × ${lo}`, reason: `You hit ${hi}+ on every set, top set ${fmt(W)} lb. Go up, aim for ${lo}–${hi}.`, up: true, first: false, last };
+    return { weight: w, reps: lo, sets: nSets, headline: `${fmt(w)} lb × ${lo}${sfx}`, reason: `You hit ${hi}${sfx}+ on every set, top set ${fmt(W)} lb. Go up, aim for ${lo}–${hi}${sfx}.`, up: true, first: false, last };
   }
   if (mode === "hold" || mode === "light") {
     const reps = Math.min(hi, Math.max(lo, bestAtW));
     const why = earned ? ` You've earned ${fmt(nextWeight(e, W))} lb; save it for a green day.` : "";
-    return { weight: W, reps, sets: nSets, headline: `${fmt(W)} lb × ${reps}`, reason: (mode === "hold" ? "Yellow day: match last time." : "Red day: same weight, 1 fewer set.") + why, up: false, first: false, last };
+    return { weight: W, reps, sets: nSets, headline: `${fmt(W)} lb × ${reps}${sfx}`, reason: (mode === "hold" ? "Yellow day: match last time." : "Red day: same weight, 1 fewer set.") + why, up: false, first: false, last };
   }
   const short = atW.filter((s) => s.reps < hi).length;
   return {
-    weight: W, reps: hi, sets: nSets, headline: `${fmt(W)} lb × ${hi}`,
-    reason: short === 0 ? `Get all ${e.sets} sets to ${hi} at ${fmt(W)} lb, then the weight goes up.` : `${short} set${short > 1 ? "s" : ""} under ${hi} last time. Hit ${hi} on all ${e.sets} sets, then go up.`,
+    weight: W, reps: hi, sets: nSets, headline: `${fmt(W)} lb × ${hi}${sfx}`,
+    reason: short === 0 ? `Get all ${e.sets} sets to ${hi}${sfx} at ${fmt(W)} lb, then the weight goes up.` : `${short} set${short > 1 ? "s" : ""} under ${hi}${sfx} last time. Hit ${hi}${sfx} on all ${e.sets} sets, then go up.`,
     up: false, first: false, last,
   };
 }
@@ -101,7 +103,7 @@ export const GROUPS: Group[] = [
   { key: "legs", label: "Legs", muscles: ["Quads", "Hamstrings/Glutes", "Calves"] },
   { key: "core", label: "Core", muscles: ["Core"] },
 ];
-const EX = new Map(ALL_EXERCISES.map((e) => [e.id, e]));
+const EX = new Map(KNOWN_EXERCISES.map((e) => [e.id, e]));
 const groupOf = (m: Muscle) => GROUPS.find((g) => g.muscles.includes(m))!;
 
 /** Planned weekly sets and training days per group, from the plan itself. */
