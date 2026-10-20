@@ -340,7 +340,7 @@ export const PLAN: Day[] = [
         inhale: "Hinging down",
         exhale: "Driving hips forward",
         cues: ["Soft knees, flat back", "Push hips back, DBs slide thighs", "Use straps if grip fails first"],
-        start: "25–30 lb each",
+        start: "25 lb each; 35 once 25 is easy",
       },
       {
         id: "db-hip-thrust",
@@ -356,7 +356,7 @@ export const PLAN: Day[] = [
         inhale: "Lowering hips",
         exhale: "Driving up",
         cues: ["Upper back on bench, one DB on hips", "Chin tucked, shins vertical at top", "Squeeze glutes 1s, don't arch back"],
-        start: "30–40 lb, one DB",
+        start: "35 lb, one DB",
       },
       {
         id: "split-squat",

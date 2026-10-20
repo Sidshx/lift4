@@ -22,7 +22,7 @@ export function readiness(fitbit: FitbitDay[], date = todayISO()): Readiness {
 }
 
 /* ================= Next-session targets ================= */
-const DB_STEPS = [5, 8, 10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80];
+const DB_STEPS = [5, 8, 10, 12, 15, 20, 25, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80];
 export function nextWeight(e: Exercise, w: number) {
   if (e.gear === "DB" || e.gear === "Bench") return DB_STEPS.find((s) => s > w) ?? w + 5;
   return w < 20 ? w + 2.5 : w + 5; // cable stack / machine
@@ -74,14 +74,25 @@ export function targetFor(e: Exercise, sets: SetRec[], date: string, mode: Mode)
   const bestAtW = Math.max(...atW.map((s) => s.reps));
   // Earned a jump: every planned set reached the top of the rep/time range (warm-up ramps are fine).
   const earned = prev.sets.length >= e.sets && prev.sets.every((s) => s.reps >= hi);
+  // Big dumbbell jump (e.g. 25 -> 35 lb, gym has no 30s): don't leap at the top of the range.
+  // Stay at this weight, push reps to hi+3 with a 3s lowering, then jump and restart at the bottom.
+  const isDb = e.gear === "DB" || e.gear === "Bench";
+  const bridge = isDb && !e.timed ? 3 : 0;
+  const bigJump = bridge > 0 && nextWeight(e, W) - W >= 10;
+  const ceil = bigJump ? hi + bridge : hi;
+  const bridged = earned && bigJump && !prev.sets.every((s) => s.reps >= ceil);
+  if (bridged && (mode === "push" || mode === "normal")) {
+    const nw = nextWeight(e, W);
+    return { weight: W, reps: ceil, sets: nSets, headline: `${fmt(W)} lb × ${ceil}`, reason: `Next dumbbell is ${fmt(nw)} lb, a big jump. Stay at ${fmt(W)} lb, lower for 3s, and reach ${ceil} reps on every set first. Then go to ${fmt(nw)} lb at ${lo} reps.`, up: false, first: false, last };
+  }
 
-  if (earned && (mode === "push" || mode === "normal")) {
+  if (earned && !bridged && (mode === "push" || mode === "normal")) {
     const w = nextWeight(e, W);
     return { weight: w, reps: lo, sets: nSets, headline: `${fmt(w)} lb × ${lo}${sfx}`, reason: `You hit ${hi}${sfx}+ on every set, top set ${fmt(W)} lb. Go up, aim for ${lo}–${hi}${sfx}.`, up: true, first: false, last };
   }
   if (mode === "hold" || mode === "light") {
     const reps = Math.min(hi, Math.max(lo, bestAtW));
-    const why = earned ? ` You've earned ${fmt(nextWeight(e, W))} lb; save it for a green day.` : "";
+    const why = earned && !bridged ? ` You've earned ${fmt(nextWeight(e, W))} lb; save it for a green day.` : "";
     return { weight: W, reps, sets: nSets, headline: `${fmt(W)} lb × ${reps}${sfx}`, reason: (mode === "hold" ? "Yellow day: match last time." : "Red day: same weight, 1 fewer set.") + why, up: false, first: false, last };
   }
   const short = atW.filter((s) => s.reps < hi).length;
