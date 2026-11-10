@@ -22,9 +22,11 @@ export function readiness(fitbit: FitbitDay[], date = todayISO()): Readiness {
 }
 
 /* ================= Next-session targets ================= */
-const DB_STEPS = [5, 8, 10, 12, 15, 20, 25, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80];
+const DB_STEPS = [5, 8, 10, 12, 15, 20, 25, 35, 40, 45];
+/** Heaviest dumbbell in the gym is 45 lb (kettlebell 40 lb). Past this, progress with time, not load. */
+export const MAX_DB_LB = 45;
 export function nextWeight(e: Exercise, w: number) {
-  if (e.gear === "DB" || e.gear === "Bench") return DB_STEPS.find((s) => s > w) ?? w + 5;
+  if (e.gear === "DB" || e.gear === "Bench") return DB_STEPS.find((s) => s > w) ?? w;
   return w < 20 ? w + 2.5 : w + 5; // cable stack / machine
 }
 
@@ -88,6 +90,10 @@ export function targetFor(e: Exercise, sets: SetRec[], date: string, mode: Mode)
 
   if (earned && !bridged && (mode === "push" || mode === "normal")) {
     const w = nextWeight(e, W);
+    if (w === W) { // already at the heaviest weight in the gym: progress with reps/time instead
+      const more = e.timed ? hi + 5 : hi + 2;
+      return { weight: W, reps: more, sets: nSets, headline: `${fmt(W)} lb × ${more}${sfx}`, reason: `${fmt(W)} lb is the heaviest in the gym. Add ${e.timed ? "5s" : "2 reps"} instead of weight.`, up: true, first: false, last };
+    }
     return { weight: w, reps: lo, sets: nSets, headline: `${fmt(w)} lb × ${lo}${sfx}`, reason: `You hit ${hi}${sfx}+ on every set, top set ${fmt(W)} lb. Go up, aim for ${lo}–${hi}${sfx}.`, up: true, first: false, last };
   }
   if (mode === "hold" || mode === "light") {
